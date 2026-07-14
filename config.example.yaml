@@ -1,0 +1,59 @@
+# Kiko deal tracker — example configuration.
+# Copy to config.yaml and edit. Environment variables (and .env) override these.
+
+scrape:
+  # Curate the Noon category / deal pages you want to track.
+  category_urls:
+    - "https://www.noon.com/saudi-en/deals/"
+    # - "https://www.noon.com/saudi-en/electronics-and-mobiles/mobiles-and-accessories/mobiles-20905/"
+  max_products_per_category: 60
+  min_delay_seconds: 2.0        # randomised 2-3s delay between requests
+  max_delay_seconds: 3.0
+  request_timeout: 20.0
+  max_retries: 4                # exponential backoff on transient failures
+  respect_robots: true          # obey robots.txt (never bypass anti-bot)
+  allow_playwright: true        # escalate to Playwright when data is JS-only
+  block_backoff_seconds: 900    # if blocked, reduce frequency (do not evade)
+
+storage:
+  backend: sqlite               # "sqlite" | "postgres"
+  sqlite_path: "data/kiko.db"
+  # postgres_dsn: "postgresql://user:pass@localhost:5432/kiko"
+  history_window_days: 90
+
+analytics:
+  window_days: 90
+  stability_band_pct: 5.0       # ±5% counts as "stable"
+  stability_min_days: 14        # min stable days before a genuine drop
+  stability_max_days: 30
+  sudden_drop_pct: 15.0         # >=15% drop …
+  sudden_drop_window_days: 3    # … within 1-3 days
+  min_history_days: 30          # below this -> history_insufficient
+  real_discount_tolerance: 1.02 # current <= 90d-min * 1.02
+
+ranking:
+  weight_discount: 0.4
+  weight_history_confidence: 0.3
+  weight_rating: 0.2
+  weight_seller: 0.1
+  seller_score_noon: 1.0
+  seller_score_marketplace: 0.5
+  # Optional output filters (null = no filter):
+  min_discount_percent: null
+  min_rating: null
+  seller_type: null             # "Noon" | "Marketplace"
+  min_confidence: null          # "High" | "Medium" | "Low"
+
+alerts:
+  enabled: false                # auto-enabled when TELEGRAM_BOT_TOKEN is set
+  telegram_bot_token: null      # prefer the TELEGRAM_BOT_TOKEN env var
+  telegram_chat_id: null        # prefer the TELEGRAM_CHAT_ID env var
+  min_drop_percent: 0.0         # only alert on drops >= this vs last record
+  attach_chart: true
+  confidence_allowlist: []      # e.g. ["High", "Medium"]; empty = all
+
+output:
+  csv_path: "output/deals.csv"
+  charts_dir: "output/charts"
+  log_dir: "logs"
+  log_level: "INFO"

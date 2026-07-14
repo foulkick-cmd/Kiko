@@ -1,0 +1,11 @@
+# Kiko deal tracker — cron example
+#
+# Runs one full tracking run every day at 07:15 (server local time).
+# Install with:  crontab scripts/kiko.cron   (edit paths first!)
+#
+# Columns: min hour day month weekday  command
+#
+# Adjust /opt/kiko to wherever you deployed the project, and make sure the
+# virtualenv path and config file are correct. Output is appended to a log.
+
+15 7 * * * cd /opt/kiko && /opt/kiko/.venv/bin/python -m deal_tracker.main --config /opt/kiko/config.yaml run >> /opt/kiko/logs/cron.log 2>&1

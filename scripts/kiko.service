@@ -1,0 +1,22 @@
+[Unit]
+# Kiko deal tracker — systemd service (invoked by kiko.timer).
+Description=Kiko Noon Saudi deal tracker (one run)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Adjust User/paths to your deployment.
+User=kiko
+WorkingDirectory=/opt/kiko
+Environment=KIKO_CONFIG=/opt/kiko/config.yaml
+# Secrets are best provided via an EnvironmentFile (not world-readable):
+EnvironmentFile=-/opt/kiko/.env
+ExecStart=/opt/kiko/.venv/bin/python -m deal_tracker.main run
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

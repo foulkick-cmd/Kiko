@@ -1,0 +1,12 @@
+# Core runtime dependencies for Kiko deal tracker.
+requests>=2.32
+beautifulsoup4>=4.12
+lxml>=5.2
+matplotlib>=3.8
+PyYAML>=6.0
+python-dotenv>=1.0
+tenacity>=8.3
+
+# Optional (install as needed):
+#   playwright>=1.44      -> JS-rendered fetching (run `playwright install chromium`)
+#   psycopg[binary]>=3.1  -> PostgreSQL storage backend

@@ -1,0 +1,18 @@
+[Unit]
+# Kiko deal tracker — systemd timer. Runs the service daily.
+# Install:
+#   sudo cp scripts/kiko.service scripts/kiko.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now kiko.timer
+#   systemctl list-timers kiko.timer
+Description=Run Kiko deal tracker daily
+
+[Timer]
+OnCalendar=*-*-* 07:15:00
+# If the machine was off at the scheduled time, run as soon as possible after.
+Persistent=true
+# Spread load / avoid thundering herd against the store.
+RandomizedDelaySec=900
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Secrets & local config
+.env
+config.yaml
+
+# Runtime outputs
+data/
+output/
+logs/
+*.db
+*.db-wal
+*.db-shm
+*.png
+!tests/**/*.png

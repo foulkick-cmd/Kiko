@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kiko-deal-tracker"
+version = "0.1.0"
+description = "Production-quality deal tracker for Noon Saudi with real-discount detection."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Kiko" }]
+dependencies = [
+    "requests>=2.32",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.2",
+    "matplotlib>=3.8",
+    "PyYAML>=6.0",
+    "python-dotenv>=1.0",
+    "tenacity>=8.3",
+]
+
+[project.optional-dependencies]
+playwright = ["playwright>=1.44"]
+postgres = ["psycopg[binary]>=3.1"]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "mypy>=1.10", "ruff>=0.5"]
+
+[project.scripts]
+kiko = "deal_tracker.main:main"
+
+[tool.setuptools]
+packages = ["deal_tracker"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_ignores = true
+ignore_missing_imports = true
