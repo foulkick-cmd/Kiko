@@ -65,12 +65,17 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         max_delay=config.scrape.max_delay_seconds,
         respect_robots=config.scrape.respect_robots,
     )
+    from .fetchers import playwright_available
+
     pw_factory = None
     if config.scrape.allow_playwright:
-        def pw_factory():  # type: ignore[misc]
-            from .fetchers import PlaywrightFetcher
+        if playwright_available():
+            def pw_factory():  # type: ignore[misc]
+                from .fetchers import PlaywrightFetcher
 
-            return PlaywrightFetcher(user_agent=config.scrape.user_agent)
+                return PlaywrightFetcher(user_agent=config.scrape.user_agent)
+        else:
+            logger.warning("Playwright not installed — JS-render escalation disabled.")
 
     with fetcher:
         if args.product:

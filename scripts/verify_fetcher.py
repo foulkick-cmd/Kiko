@@ -35,7 +35,15 @@ from deal_tracker.parsers import ProductRef  # noqa: E402
 from deal_tracker.stores import get_adapter  # noqa: E402
 
 
-def _pw_factory(config):
+def _pw_factory(config, log):
+    """Build a Playwright factory, or None (with a clear note) if unavailable."""
+    from deal_tracker.fetchers import playwright_available
+
+    if not playwright_available():
+        log.warning("Playwright not installed — cannot escalate to JS rendering. "
+                    "Install with `pip install playwright && playwright install chromium`.")
+        return None
+
     def factory():
         from deal_tracker.fetchers import PlaywrightFetcher
 
@@ -67,7 +75,7 @@ def main() -> int:
         max_delay=config.scrape.max_delay_seconds,
         respect_robots=config.scrape.respect_robots,
     )
-    pw_factory = None if args.no_playwright else _pw_factory(config)
+    pw_factory = None if args.no_playwright else _pw_factory(config, log)
 
     with fetcher:
         # First show the raw requests-only result so JS-rendering is visible.
@@ -85,6 +93,12 @@ def main() -> int:
         if raw.status is FetchStatus.DISALLOWED:
             log.error("robots.txt disallows this URL for our user agent.")
             return 4
+        if raw.status is FetchStatus.ERROR and pw_factory is None:
+            log.error("Requests fetch failed (network/proxy/connection error: %s) and "
+                      "Playwright escalation is unavailable — cannot verify. Run from a "
+                      "network that can reach the host, or install Playwright.",
+                      raw.error)
+            return 5
 
         if args.product:
             ref = ProductRef(product_id="verify", product_url=args.url)

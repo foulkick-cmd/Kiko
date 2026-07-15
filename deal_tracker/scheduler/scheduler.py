@@ -61,9 +61,9 @@ def _playwright_factory(config: Config):
     if not config.scrape.allow_playwright:
         return None
 
-    try:
-        import playwright.sync_api  # noqa: F401
-    except ImportError:
+    from ..fetchers import playwright_available
+
+    if not playwright_available():
         logger.warning(
             "allow_playwright is set but Playwright is not installed; "
             "JS-render escalation is disabled. Install with "
