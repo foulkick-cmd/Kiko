@@ -40,26 +40,61 @@ jobs:
       - name: Run core-logic unit tests
         run: ./gradlew :core-logic:test --no-daemon --stacktrace
 
-      # Decodes the release keystore from a repository secret into a runner-local file. The
-      # keystore itself is never committed to the repo -- only this base64 blob lives in GitHub
-      # Actions secrets (Settings > Secrets and variables > Actions):
-      #   RELEASE_KEYSTORE_BASE64, RELEASE_KEYSTORE_PASSWORD, RELEASE_KEY_ALIAS, RELEASE_KEY_PASSWORD
-      - name: Decode release keystore
+      # Release signing. Two paths, resolved at runtime and never committed to the repo:
+      #  1. If the RELEASE_KEYSTORE_BASE64/RELEASE_KEYSTORE_PASSWORD/RELEASE_KEY_ALIAS/
+      #     RELEASE_KEY_PASSWORD repository secrets are set, that keystore is decoded and used
+      #     (a stable signing identity across builds, so future updates install over old ones).
+      #  2. Otherwise, keytool generates a fresh keystore on the runner itself with a
+      #     runner-generated random password -- no secret to create, no long string to copy.
+      #     This trades away a stable signing identity (each such run's key is different, so an
+      #     APK from one unsigned-secret run won't upgrade-install over another) for a signed,
+      #     installable APK with zero manual secret handling. Add the four secrets above whenever
+      #     a stable identity is wanted.
+      # The generated/decoded password is masked in the log and the keystore file is deleted at
+      # the end of the job either way.
+      - name: Prepare release signing
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
-        run: |
-          if [ -z "$RELEASE_KEYSTORE_BASE64" ]; then
-            echo "::error::RELEASE_KEYSTORE_BASE64 secret is not set. Add the release signing secrets to this repository before running this workflow -- see the signing setup notes."
-            exit 1
-          fi
-          echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
-
-      - name: Build release APK
-        env:
-          RELEASE_KEYSTORE_PATH: ${{ runner.temp }}/release.keystore
           RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          set -e
+          KEYSTORE_PATH="$RUNNER_TEMP/release.keystore"
+
+          if [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
+            echo "Using the RELEASE_KEYSTORE_BASE64 repository secret for signing."
+            echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > "$KEYSTORE_PATH"
+            KS_PASSWORD="$RELEASE_KEYSTORE_PASSWORD"
+            KS_ALIAS="$RELEASE_KEY_ALIAS"
+            KS_KEY_PASSWORD="$RELEASE_KEY_PASSWORD"
+          else
+            echo "No signing secrets found -- generating an ephemeral release keystore for this run."
+            KS_PASSWORD=$(openssl rand -hex 24)
+            KS_ALIAS="smartvideocompressor"
+            KS_KEY_PASSWORD="$KS_PASSWORD"
+            echo "::add-mask::$KS_PASSWORD"
+            keytool -genkeypair -v \
+              -keystore "$KEYSTORE_PATH" \
+              -alias "$KS_ALIAS" \
+              -keyalg RSA -keysize 4096 \
+              -validity 10000 \
+              -storetype PKCS12 \
+              -storepass "$KS_PASSWORD" \
+              -keypass "$KS_KEY_PASSWORD" \
+              -dname "CN=Smart Video Compressor, OU=Personal, O=foulkick, L=NA, ST=NA, C=US"
+          fi
+
+          echo "::add-mask::$KS_PASSWORD"
+          echo "::add-mask::$KS_KEY_PASSWORD"
+          {
+            echo "RELEASE_KEYSTORE_PATH=$KEYSTORE_PATH"
+            echo "RELEASE_KEYSTORE_PASSWORD=$KS_PASSWORD"
+            echo "RELEASE_KEY_ALIAS=$KS_ALIAS"
+            echo "RELEASE_KEY_PASSWORD=$KS_KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+
+      - name: Build release APK
         run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
 
       - name: Verify APK signature
@@ -73,13 +108,13 @@ jobs:
           BUILD_TOOLS_DIR=$(find "$ANDROID_HOME/build-tools" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -1)
           APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
           echo "Using apksigner: $APKSIGNER"
-          "$APKSIGNER" verify --print-certs "$APK"
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
           echo "=== SHA-256 ==="
           sha256sum "$APK"
 
-      - name: Clean up decoded keystore
+      - name: Clean up release keystore
         if: always()
-        run: rm -f "$RUNNER_TEMP/release.keystore"
+        run: rm -f "$RELEASE_KEYSTORE_PATH"
 
       - name: Upload release APK
         uses: actions/upload-artifact@v4
