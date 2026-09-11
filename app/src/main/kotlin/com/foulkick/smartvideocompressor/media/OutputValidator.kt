@@ -32,14 +32,23 @@ class OutputValidator {
             val mime = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO)
             if (mime != "yes") return ValidationResult.Invalid("No video stream found in output")
 
-            val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+            val codedWidth = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
                 ?.toIntOrNull() ?: return ValidationResult.Invalid("Output has no readable width")
-            val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+            val codedHeight = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
                 ?.toIntOrNull() ?: return ValidationResult.Invalid("Output has no readable height")
+            val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                ?.toIntOrNull() ?: 0
 
-            if (width != expectedWidth || height != expectedHeight) {
+            // METADATA_KEY_VIDEO_WIDTH/HEIGHT report the *coded* (pre-rotation) frame, same as for
+            // source probing -- rotate the same way SourceProbe.displayWidth/Height does before
+            // comparing, so a 90/270-rotated portrait output isn't reported as a dimension mismatch
+            // just because its coded frame is stored sideways.
+            val displayWidth = if (rotation % 180 == 0) codedWidth else codedHeight
+            val displayHeight = if (rotation % 180 == 0) codedHeight else codedWidth
+
+            if (displayWidth != expectedWidth || displayHeight != expectedHeight) {
                 return ValidationResult.Invalid(
-                    "Output dimensions ($width x $height) do not match expected ($expectedWidth x $expectedHeight)",
+                    "Output dimensions ($displayWidth x $displayHeight) do not match expected ($expectedWidth x $expectedHeight)",
                 )
             }
 

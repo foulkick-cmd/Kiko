@@ -25,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -48,6 +49,7 @@ fun CompressorScreen(
     val jobs by viewModel.jobs.collectAsState()
     val isRunning by viewModel.isRunning.collectAsState()
     val lastCrash by viewModel.lastCrash.collectAsState()
+    val sortOrder by viewModel.sortOrder.collectAsState()
 
     LaunchedEffect(Unit) { onRequestPermissions() }
 
@@ -77,10 +79,26 @@ fun CompressorScreen(
 
             androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(4.dp))
 
+            val orderedSelection = remember(selectedVideos, sortOrder) { sortVideos(selectedVideos, sortOrder) }
+
             if (selectedVideos.isNotEmpty() && jobs.isEmpty()) {
-                Text("${selectedVideos.size} video(s) selected", style = MaterialTheme.typography.bodyMedium)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("${selectedVideos.size} video(s) selected", style = MaterialTheme.typography.bodyMedium)
+                    Button(onClick = { viewModel.cycleSortOrder() }) {
+                        Text(
+                            when (sortOrder) {
+                                SortOrder.SELECTION -> "Sort: default"
+                                SortOrder.SIZE_DESCENDING -> "Sort: largest first"
+                                SortOrder.SIZE_ASCENDING -> "Sort: smallest first"
+                            },
+                        )
+                    }
+                }
                 Button(
-                    onClick = { onStartCompression(selectedVideos, limitTo30Fps) },
+                    onClick = { onStartCompression(orderedSelection, limitTo30Fps) },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text("Compress")
@@ -93,7 +111,7 @@ fun CompressorScreen(
                 }
             }
 
-            val displayList = if (jobs.isNotEmpty()) jobs else selectedVideos.map { VideoJobState(video = it) }
+            val displayList = if (jobs.isNotEmpty()) jobs else orderedSelection.map { VideoJobState(video = it) }
 
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 items(displayList) { job -> VideoJobRow(job) }
@@ -156,6 +174,12 @@ private fun LastCrashCard(report: String, onDismiss: () -> Unit) {
             }
         }
     }
+}
+
+private fun sortVideos(videos: List<SelectedVideo>, order: SortOrder): List<SelectedVideo> = when (order) {
+    SortOrder.SELECTION -> videos
+    SortOrder.SIZE_DESCENDING -> videos.sortedByDescending { it.sizeBytes }
+    SortOrder.SIZE_ASCENDING -> videos.sortedBy { it.sizeBytes }
 }
 
 private fun formatMb(bytes: Long): String = "%.1f MB".format(bytes / (1024.0 * 1024.0))

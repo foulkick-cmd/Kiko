@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+enum class SortOrder { SELECTION, SIZE_DESCENDING, SIZE_ASCENDING }
+
 class CompressorViewModel : ViewModel() {
 
     private val _selectedVideos = MutableStateFlow<List<SelectedVideo>>(emptyList())
@@ -28,6 +30,9 @@ class CompressorViewModel : ViewModel() {
     private val _lastCrash = MutableStateFlow<String?>(null)
     val lastCrash: StateFlow<String?> = _lastCrash.asStateFlow()
 
+    private val _sortOrder = MutableStateFlow(SortOrder.SELECTION)
+    val sortOrder: StateFlow<SortOrder> = _sortOrder.asStateFlow()
+
     private var jobsObserver: Job? = null
 
     fun setLastCrash(report: String?) {
@@ -40,6 +45,15 @@ class CompressorViewModel : ViewModel() {
         // from a previous batch, otherwise the "Compress" button never reappears (jobs.isEmpty()
         // in CompressorScreen gates it) and old rows are shown alongside the new selection.
         _jobs.value = emptyList()
+    }
+
+    /** Cycles: order picked -> largest first -> smallest first -> back to order picked. */
+    fun cycleSortOrder() {
+        _sortOrder.value = when (_sortOrder.value) {
+            SortOrder.SELECTION -> SortOrder.SIZE_DESCENDING
+            SortOrder.SIZE_DESCENDING -> SortOrder.SIZE_ASCENDING
+            SortOrder.SIZE_ASCENDING -> SortOrder.SELECTION
+        }
     }
 
     fun setLimitTo30Fps(enabled: Boolean) {
