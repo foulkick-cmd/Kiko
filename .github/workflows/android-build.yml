@@ -49,6 +49,13 @@ jobs:
       # exact Media3 1.5.1 API surface used in VideoCompressor.kt was written from unverifiable
       # recall. Ground-truth it directly against the jars this CI run already downloaded, rather
       # than guessing again. Remove once the real build is green.
+      #
+      # Round 1 already confirmed: Effects lives in androidx.media3.transformer (not .common),
+      # and VideoEncoderSettings has NO bitrate-mode constants on it at all (bitrateMode is a
+      # plain int) -- so this round also dumps DefaultEncoderFactory, Composition,
+      # EditedMediaItem(Sequence), Transformer, ProgressHolder, effect.Presentation,
+      # effect.FrameDropEffect, and the platform's MediaCodecInfo.EncoderCapabilities (the likely
+      # real source of the bitrate-mode int constants).
       - name: Inspect real Media3 API surface (temporary diagnostic)
         if: steps.assemble_release.outcome == 'failure'
         run: |
@@ -65,28 +72,50 @@ jobs:
           for jar in $(find ~/.gradle/caches -path "*androidx.media3*" -name "*.jar" ! -name "*sources*" 2>/dev/null); do
             unzip -oq "$jar" -d /tmp/media3_classes 2>/dev/null || true
           done
-          echo "=== classes matching Effects ==="
-          find /tmp/media3_classes -iname "*Effects*"
-          echo "=== classes matching VideoEncoderSettings ==="
-          find /tmp/media3_classes -iname "*VideoEncoderSettings*"
-          echo "=== classes matching Composition ==="
-          find /tmp/media3_classes -iname "*Composition*"
-          echo "=== classes matching EditedMediaItem ==="
-          find /tmp/media3_classes -iname "*EditedMediaItem*"
-          echo "=== classes matching FrameDropEffect ==="
-          find /tmp/media3_classes -iname "*FrameDropEffect*"
-          echo "=== classes matching DefaultEncoderFactory ==="
-          find /tmp/media3_classes -iname "*DefaultEncoderFactory*"
-          echo "=== javap androidx.media3.common.Effects ==="
-          javap -p -cp /tmp/media3_classes androidx.media3.common.Effects 2>&1 || true
-          echo "=== javap androidx.media3.common.effect.Effects (alt package guess) ==="
-          javap -p -cp /tmp/media3_classes androidx.media3.common.effect.Effects 2>&1 || true
-          echo "=== javap androidx.media3.transformer.VideoEncoderSettings ==="
-          javap -p -cp /tmp/media3_classes androidx.media3.transformer.VideoEncoderSettings 2>&1 || true
-          echo "=== javap androidx.media3.transformer.VideoEncoderSettings\$Builder ==="
-          javap -p -cp /tmp/media3_classes 'androidx.media3.transformer.VideoEncoderSettings$Builder' 2>&1 || true
 
-      - name: Fail if assembleRelease failed
+          ANDROID_JAR=$(find "$ANDROID_HOME" -path "*platforms/android-35*" -name "android.jar" 2>/dev/null | head -1)
+          echo "ANDROID_JAR=$ANDROID_JAR"
+
+          for cls in \
+            androidx.media3.transformer.Effects \
+            'androidx.media3.transformer.DefaultEncoderFactory$Builder' \
+            androidx.media3.transformer.DefaultEncoderFactory \
+            androidx.media3.transformer.Composition \
+            'androidx.media3.transformer.Composition$Builder' \
+            'androidx.media3.transformer.Composition$HdrMode' \
+            androidx.media3.transformer.EditedMediaItem \
+            'androidx.media3.transformer.EditedMediaItem$Builder' \
+            androidx.media3.transformer.EditedMediaItemSequence \
+            'androidx.media3.transformer.EditedMediaItemSequence$Builder' \
+            androidx.media3.transformer.Transformer \
+            'androidx.media3.transformer.Transformer$Builder' \
+            'androidx.media3.transformer.Transformer$Listener' \
+            androidx.media3.transformer.ProgressHolder \
+            androidx.media3.transformer.ExportResult \
+            androidx.media3.transformer.ExportException \
+          ; do
+            echo "=== javap $cls ==="
+            javap -p -cp /tmp/media3_classes "$cls" 2>&1 || true
+          done
+
+          for aar in $(find ~/.gradle/caches -path "*androidx.media3*effect*" -name "*.aar" 2>/dev/null); do
+            d=$(mktemp -d)
+            unzip -oq "$aar" -d "$d" classes.jar 2>/dev/null || true
+            [ -f "$d/classes.jar" ] && unzip -oq "$d/classes.jar" -d /tmp/media3_classes
+          done
+          for cls in androidx.media3.effect.Presentation androidx.media3.effect.FrameDropEffect; do
+            echo "=== javap $cls ==="
+            javap -p -cp /tmp/media3_classes "$cls" 2>&1 || true
+          done
+
+          if [ -n "$ANDROID_JAR" ]; then
+            echo "=== javap android.media.MediaCodecInfo\$EncoderCapabilities (platform android.jar) ==="
+            javap -p -cp "$ANDROID_JAR" 'android.media.MediaCodecInfo$EncoderCapabilities' 2>&1 || true
+          else
+            echo "=== android.jar not found under \$ANDROID_HOME ==="
+          fi
+
+      - name: Mark job as failed (assembleRelease did not succeed)
         if: steps.assemble_release.outcome == 'failure'
         run: exit 1
 
