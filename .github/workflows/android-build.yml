@@ -41,7 +41,54 @@ jobs:
         run: ./gradlew :core-logic:test --no-daemon --stacktrace
 
       - name: Build release APK
+        id: assemble_release
         run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+        continue-on-error: true
+
+      # TEMPORARY diagnostic step: this environment cannot reach Google's Maven repo, so the
+      # exact Media3 1.5.1 API surface used in VideoCompressor.kt was written from unverifiable
+      # recall. Ground-truth it directly against the jars this CI run already downloaded, rather
+      # than guessing again. Remove once the real build is green.
+      - name: Inspect real Media3 API surface (temporary diagnostic)
+        if: steps.assemble_release.outcome == 'failure'
+        run: |
+          set -x
+          mkdir -p /tmp/media3_classes
+          find ~/.gradle/caches -path "*androidx.media3*" \( -name "*.aar" -o -name "*.jar" \) 2>/dev/null
+          for aar in $(find ~/.gradle/caches -path "*androidx.media3*" -name "*.aar" 2>/dev/null); do
+            d=$(mktemp -d)
+            unzip -oq "$aar" -d "$d" classes.jar 2>/dev/null || true
+            if [ -f "$d/classes.jar" ]; then
+              unzip -oq "$d/classes.jar" -d /tmp/media3_classes
+            fi
+          done
+          for jar in $(find ~/.gradle/caches -path "*androidx.media3*" -name "*.jar" ! -name "*sources*" 2>/dev/null); do
+            unzip -oq "$jar" -d /tmp/media3_classes 2>/dev/null || true
+          done
+          echo "=== classes matching Effects ==="
+          find /tmp/media3_classes -iname "*Effects*"
+          echo "=== classes matching VideoEncoderSettings ==="
+          find /tmp/media3_classes -iname "*VideoEncoderSettings*"
+          echo "=== classes matching Composition ==="
+          find /tmp/media3_classes -iname "*Composition*"
+          echo "=== classes matching EditedMediaItem ==="
+          find /tmp/media3_classes -iname "*EditedMediaItem*"
+          echo "=== classes matching FrameDropEffect ==="
+          find /tmp/media3_classes -iname "*FrameDropEffect*"
+          echo "=== classes matching DefaultEncoderFactory ==="
+          find /tmp/media3_classes -iname "*DefaultEncoderFactory*"
+          echo "=== javap androidx.media3.common.Effects ==="
+          javap -p -cp /tmp/media3_classes androidx.media3.common.Effects 2>&1 || true
+          echo "=== javap androidx.media3.common.effect.Effects (alt package guess) ==="
+          javap -p -cp /tmp/media3_classes androidx.media3.common.effect.Effects 2>&1 || true
+          echo "=== javap androidx.media3.transformer.VideoEncoderSettings ==="
+          javap -p -cp /tmp/media3_classes androidx.media3.transformer.VideoEncoderSettings 2>&1 || true
+          echo "=== javap androidx.media3.transformer.VideoEncoderSettings\$Builder ==="
+          javap -p -cp /tmp/media3_classes 'androidx.media3.transformer.VideoEncoderSettings$Builder' 2>&1 || true
+
+      - name: Fail if assembleRelease failed
+        if: steps.assemble_release.outcome == 'failure'
+        run: exit 1
 
       - name: Upload release APK
         uses: actions/upload-artifact@v4
