@@ -23,7 +23,11 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = true
+            // Left off for now: several Media3 APIs used in this project are unverified against
+            // real docs (see VideoCompressor.kt), so the priority is proving the Kotlin/Media3
+            // wiring compiles at all before adding R8 shrinking as a second variable. Re-enable
+            // once there's a known-green build.
+            isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
         debug {
