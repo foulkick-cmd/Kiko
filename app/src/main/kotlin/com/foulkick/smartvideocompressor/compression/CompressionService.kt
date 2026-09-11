@@ -1,8 +1,12 @@
 package com.foulkick.smartvideocompressor.compression
 
 import android.app.Notification
+import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.net.Uri
 import android.os.Binder
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -13,8 +17,8 @@ import com.foulkick.smartvideocompressor.MainActivity
 import com.foulkick.smartvideocompressor.R
 import com.foulkick.smartvideocompressor.SmartVideoCompressorApp
 import com.foulkick.smartvideocompressor.model.CompressionStatus
-import com.foulkick.smartvideocompressor.model.SelectedVideo
 import com.foulkick.smartvideocompressor.model.VideoJobState
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,6 +29,13 @@ import kotlinx.coroutines.launch
  * Runs the compression batch sequentially (one video at a time, by design -- see spec section
  * 15) as a foreground service of type mediaProcessing, so it survives the screen turning off
  * or the app going to background, with a persistent progress notification.
+ *
+ * The batch is started from [onStartCommand] (via [ACTION_START]'s intent extras), not from a
+ * bound-service call: Android 14 enforces that a service started with
+ * Context.startForegroundService() must call startForeground() almost immediately, and that
+ * call can only happen reliably from onStartCommand -- waiting for a client to bind first (which
+ * can race, especially on a cold start) risks a ForegroundServiceDidNotStartInTimeException.
+ * Binding ([onBind]) is only used to observe [jobs] and to issue [cancel].
  */
 class CompressionService : LifecycleService() {
 
@@ -34,9 +45,8 @@ class CompressionService : LifecycleService() {
     private val _jobs = MutableStateFlow<List<VideoJobState>>(emptyList())
     val jobs: StateFlow<List<VideoJobState>> = _jobs.asStateFlow()
 
-    private var limitTo30Fps: Boolean = false
     @Volatile private var cancelRequested: Boolean = false
-    private var batchJob: kotlinx.coroutines.Job? = null
+    private var batchJob: Job? = null
 
     inner class LocalBinder : Binder() {
         fun getService(): CompressionService = this@CompressionService
@@ -52,20 +62,39 @@ class CompressionService : LifecycleService() {
         return binder
     }
 
-    fun start(videos: List<SelectedVideo>, limitTo30Fps: Boolean) {
-        if (batchJob?.isActive == true) return
-        this.limitTo30Fps = limitTo30Fps
-        cancelRequested = false
-        _jobs.value = videos.map { VideoJobState(video = it) }
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        super.onStartCommand(intent, flags, startId)
+        when (intent?.action) {
+            ACTION_CANCEL -> cancel()
+            ACTION_START -> {
+                val uris = intent.getParcelableArrayListExtraCompat<Uri>(EXTRA_URIS)
+                val limitTo30Fps = intent.getBooleanExtra(EXTRA_LIMIT_30FPS, false)
+                if (uris != null && uris.isNotEmpty()) {
+                    start(uris, limitTo30Fps)
+                }
+            }
+        }
+        return START_NOT_STICKY
+    }
 
+    /** Must be called synchronously from [onStartCommand] -- see class doc. */
+    private fun start(uris: List<Uri>, limitTo30Fps: Boolean) {
+        if (batchJob?.isActive == true) return
+        cancelRequested = false
+
+        // Promote to foreground immediately, before any suspending work, so the OS-mandated
+        // start deadline is always met regardless of how long metadata resolution takes.
         ServiceCompat.startForeground(
             this,
             NOTIFICATION_ID,
-            buildNotification(currentFileName = null, currentPercent = 0, overallDone = 0, overallTotal = videos.size),
-            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING,
+            buildNotification(currentFileName = null, currentPercent = 0, overallDone = 0, overallTotal = uris.size),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING,
         )
 
         batchJob = lifecycleScope.launch {
+            val videos = engine.resolveSelectedVideos(uris)
+            _jobs.value = videos.map { VideoJobState(video = it) }
+
             for ((index, video) in videos.withIndex()) {
                 if (cancelRequested) {
                     markRemaining(from = index, status = CompressionStatus.CANCELLED)
@@ -74,7 +103,7 @@ class CompressionService : LifecycleService() {
                 val startTime = System.currentTimeMillis()
                 engine.process(
                     video = video,
-                    limitTo30Fps = this@CompressionService.limitTo30Fps,
+                    limitTo30Fps = limitTo30Fps,
                     onUpdate = { updated ->
                         val withElapsed = updated.copy(elapsedMillis = System.currentTimeMillis() - startTime)
                         updateJob(index, withElapsed)
@@ -112,7 +141,7 @@ class CompressionService : LifecycleService() {
             overallDone = index,
             overallTotal = total,
         )
-        val manager = getSystemService(android.app.NotificationManager::class.java)
+        val manager = getSystemService(NotificationManager::class.java)
         manager.notify(NOTIFICATION_ID, notification)
     }
 
@@ -147,16 +176,22 @@ class CompressionService : LifecycleService() {
             .build()
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        super.onStartCommand(intent, flags, startId)
-        if (intent?.action == ACTION_CANCEL) {
-            cancel()
-        }
-        return START_NOT_STICKY
-    }
-
     companion object {
         private const val NOTIFICATION_ID = 1001
+        const val ACTION_START = "com.foulkick.smartvideocompressor.action.START"
         const val ACTION_CANCEL = "com.foulkick.smartvideocompressor.action.CANCEL"
+        const val EXTRA_URIS = "com.foulkick.smartvideocompressor.extra.URIS"
+        const val EXTRA_LIMIT_30FPS = "com.foulkick.smartvideocompressor.extra.LIMIT_30FPS"
+
+        fun buildStartIntent(context: Context, uris: List<Uri>, limitTo30Fps: Boolean): Intent {
+            return Intent(context, CompressionService::class.java)
+                .setAction(ACTION_START)
+                .putParcelableArrayListExtra(EXTRA_URIS, ArrayList(uris))
+                .putExtra(EXTRA_LIMIT_30FPS, limitTo30Fps)
+        }
     }
 }
+
+// minSdk is 33 (Tiramisu), so the typed overload is always available -- no legacy branch needed.
+private inline fun <reified T : android.os.Parcelable> Intent.getParcelableArrayListExtraCompat(name: String): ArrayList<T>? =
+    getParcelableArrayListExtra(name, T::class.java)

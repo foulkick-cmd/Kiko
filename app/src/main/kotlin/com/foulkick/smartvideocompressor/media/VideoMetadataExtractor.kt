@@ -36,7 +36,14 @@ class VideoMetadataExtractor(private val context: Context) {
 
             val trackInfo = probeVideoTrack(uri)
 
+            // MediaExtractor's track format often omits KEY_FRAME_RATE for camera-recorded
+            // (especially VFR) MP4s; METADATA_KEY_CAPTURE_FRAMERATE is a second, independent
+            // source of the nominal capture rate before we give up and let
+            // EffectiveFpsCalculator fall back to its own conservative default.
             val nominalFrameRate = trackInfo.frameRate
+                ?: retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)
+                    ?.toDoubleOrNull()
+                    ?.takeIf { it > 0.0 }
 
             val bitrate = trackInfo.bitrateBps ?: estimateBitrateFromFileSize(uri, durationSeconds)
 

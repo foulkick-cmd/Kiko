@@ -2,8 +2,10 @@ package com.foulkick.smartvideocompressor.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.foulkick.smartvideocompressor.model.CompressionStatus
 import com.foulkick.smartvideocompressor.model.SelectedVideo
 import com.foulkick.smartvideocompressor.model.VideoJobState
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,8 +25,14 @@ class CompressorViewModel : ViewModel() {
     private val _isRunning = MutableStateFlow(false)
     val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
 
+    private var jobsObserver: Job? = null
+
     fun setSelectedVideos(videos: List<SelectedVideo>) {
         _selectedVideos.value = videos
+        // Selecting a new batch always starts a fresh run: drop any results/rows left over
+        // from a previous batch, otherwise the "Compress" button never reappears (jobs.isEmpty()
+        // in CompressorScreen gates it) and old rows are shown alongside the new selection.
+        _jobs.value = emptyList()
     }
 
     fun setLimitTo30Fps(enabled: Boolean) {
@@ -35,8 +43,14 @@ class CompressorViewModel : ViewModel() {
         _isRunning.value = running
     }
 
-    fun observeJobs(flow: kotlinx.coroutines.flow.StateFlow<List<VideoJobState>>) {
-        viewModelScope.launch {
+    /**
+     * Subscribes to the bound service's job flow. Safe to call more than once (e.g. the
+     * Activity re-binds on every onStart): a prior subscription is cancelled first so we never
+     * accumulate duplicate collectors on the same underlying flow.
+     */
+    fun observeJobs(flow: StateFlow<List<VideoJobState>>) {
+        jobsObserver?.cancel()
+        jobsObserver = viewModelScope.launch {
             flow.collect { updated ->
                 _jobs.value = updated
                 if (updated.isNotEmpty() && updated.all { it.status.isTerminal() }) {
@@ -46,12 +60,10 @@ class CompressorViewModel : ViewModel() {
         }
     }
 
-    private fun com.foulkick.smartvideocompressor.model.CompressionStatus.isTerminal(): Boolean {
-        return this == com.foulkick.smartvideocompressor.model.CompressionStatus.DONE ||
-            this == com.foulkick.smartvideocompressor.model.CompressionStatus.SKIPPED ||
-            this == com.foulkick.smartvideocompressor.model.CompressionStatus.FAILED ||
-            this == com.foulkick.smartvideocompressor.model.CompressionStatus.CANCELLED
-    }
+    private fun CompressionStatus.isTerminal(): Boolean = this == CompressionStatus.DONE ||
+        this == CompressionStatus.SKIPPED ||
+        this == CompressionStatus.FAILED ||
+        this == CompressionStatus.CANCELLED
 
     fun reset() {
         _selectedVideos.value = emptyList()

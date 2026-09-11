@@ -10,9 +10,11 @@ import com.foulkick.smartvideocompressor.media.VideoCompressor
 import com.foulkick.smartvideocompressor.media.VideoMetadataExtractor
 import com.foulkick.smartvideocompressor.model.CompressionStatus
 import com.foulkick.smartvideocompressor.model.SelectedVideo
+import com.foulkick.smartvideocompressor.model.SourceProbe
 import com.foulkick.smartvideocompressor.model.VideoJobState
 import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 
 /** Runs the full per-video pipeline: probe -> skip check -> compress -> validate -> publish. */
 class CompressionEngine(context: Context) {
@@ -23,6 +25,15 @@ class CompressionEngine(context: Context) {
     private val validator = OutputValidator()
     private val publisher = OutputPublisher(appContext)
     private val locationResolver = SourceLocationResolver(appContext)
+
+    /** Resolves the display name/size needed to show and process a batch, from bare Uris. */
+    fun resolveSelectedVideos(uris: List<Uri>): List<SelectedVideo> = uris.map { uri ->
+        SelectedVideo(
+            uri = uri,
+            displayName = locationResolver.displayName(uri),
+            sizeBytes = metadataExtractor.sizeBytes(uri).coerceAtLeast(0L),
+        )
+    }
 
     suspend fun process(
         video: SelectedVideo,
@@ -68,7 +79,7 @@ class CompressionEngine(context: Context) {
                     onUpdate(state.copy(progressPercent = percent))
                 },
             )
-        } catch (e: kotlinx.coroutines.CancellationException) {
+        } catch (e: CancellationException) {
             tempOutput.delete()
             return state.copy(status = CompressionStatus.CANCELLED).also(onUpdate)
         }
@@ -87,7 +98,7 @@ class CompressionEngine(context: Context) {
     private fun finishSuccessfulExport(
         state: VideoJobState,
         video: SelectedVideo,
-        probe: com.foulkick.smartvideocompressor.model.SourceProbe,
+        probe: SourceProbe,
         plan: VideoCompressor.Plan,
         tempOutput: File,
         onUpdate: (VideoJobState) -> Unit,
@@ -97,6 +108,8 @@ class CompressionEngine(context: Context) {
             tempOutput.delete()
             return state.copy(status = CompressionStatus.SKIPPED, message = postDecision.reason).also(onUpdate)
         }
+
+        onUpdate(state.copy(status = CompressionStatus.VALIDATING, progressPercent = 100))
 
         val validation = validator.validate(
             outputFile = tempOutput,
@@ -120,7 +133,6 @@ class CompressionEngine(context: Context) {
                 sourceDateTakenMs = location.dateTakenMs,
             )
         } catch (e: Exception) {
-            tempOutput.delete()
             return state.copy(status = CompressionStatus.FAILED, message = "Could not save output: ${e.message}")
                 .also(onUpdate)
         } finally {
@@ -134,6 +146,4 @@ class CompressionEngine(context: Context) {
             outputDisplayName = published.displayName,
         ).also(onUpdate)
     }
-
-    fun probeSizeBytes(uri: Uri): Long = metadataExtractor.sizeBytes(uri)
 }

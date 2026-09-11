@@ -93,24 +93,25 @@ private fun VideoJobRow(job: VideoJobState) {
     Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Column(modifier = Modifier.padding(12.dp)) {
             Text(job.video.displayName, style = MaterialTheme.typography.titleMedium)
+            Text("Original: ${formatMb(job.video.sizeBytes)}", style = MaterialTheme.typography.bodySmall)
 
             when (job.status) {
                 CompressionStatus.QUEUED -> Text("Queued")
                 CompressionStatus.PROBING -> Text("Reading video info…")
                 CompressionStatus.COMPRESSING -> {
-                    Text("Compressing… ${job.progressPercent}%")
+                    Text("Compressing… ${job.progressPercent}% · ${formatElapsed(job.elapsedMillis)}")
                     LinearProgressIndicator(
                         progress = { job.progressPercent / 100f },
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
-                CompressionStatus.VALIDATING -> Text("Validating output…")
+                CompressionStatus.VALIDATING -> Text("Validating output… · ${formatElapsed(job.elapsedMillis)}")
                 CompressionStatus.DONE -> {
                     val original = formatMb(job.video.sizeBytes)
                     val output = job.outputSizeBytes?.let { formatMb(it) } ?: "?"
                     val percent = job.percentSaved?.let { "%.1f".format(it) } ?: "?"
                     Text("$original → $output")
-                    Text("$percent% saved")
+                    Text("$percent% saved · ${formatElapsed(job.elapsedMillis)}")
                 }
                 CompressionStatus.SKIPPED -> Text("Skipped — ${job.message}")
                 CompressionStatus.FAILED -> Text("Failed — ${job.message}")
@@ -121,3 +122,10 @@ private fun VideoJobRow(job: VideoJobState) {
 }
 
 private fun formatMb(bytes: Long): String = "%.1f MB".format(bytes / (1024.0 * 1024.0))
+
+private fun formatElapsed(millis: Long): String {
+    val totalSeconds = millis / 1000
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return "%d:%02d".format(minutes, seconds)
+}

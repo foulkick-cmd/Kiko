@@ -3,7 +3,6 @@ package com.foulkick.smartvideocompressor.media
 import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
-import android.os.Build
 import android.provider.MediaStore
 import com.foulkick.smartvideocompressor.logic.OutputFilenameGenerator
 import java.io.File
@@ -29,12 +28,14 @@ class OutputPublisher(private val context: Context) {
         sourceRelativePath: String?,
         sourceDateTakenMs: Long?,
     ): Published {
-        val relativePath = sourceRelativePath ?: (Environment_MOVIES_RELATIVE_PATH)
+        val relativePath = normalizeRelativePath(sourceRelativePath ?: DEFAULT_RELATIVE_PATH)
         val finalName = OutputFilenameGenerator.generate(originalDisplayName) { candidate ->
             existsInMediaStore(candidate, relativePath)
         }
 
         val resolver = context.contentResolver
+        // minSdk is 33 (well above the API 29 scoped-storage baseline), so IS_PENDING is always
+        // available -- no legacy branch needed.
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, finalName)
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
@@ -42,9 +43,7 @@ class OutputPublisher(private val context: Context) {
             if (sourceDateTakenMs != null) {
                 put(MediaStore.Video.Media.DATE_TAKEN, sourceDateTakenMs)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                put(MediaStore.Video.Media.IS_PENDING, 1)
-            }
+            put(MediaStore.Video.Media.IS_PENDING, 1)
         }
 
         val collection = MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
@@ -55,14 +54,15 @@ class OutputPublisher(private val context: Context) {
             tempFile.inputStream().use { input -> input.copyTo(out) }
         } ?: error("Could not open an output stream for the new MediaStore entry")
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val doneValues = ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }
-            resolver.update(itemUri, doneValues, null, null)
-        }
+        val doneValues = ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }
+        resolver.update(itemUri, doneValues, null, null)
 
-        val finalSize = resolver.openAssetFileDescriptor(itemUri, "r")?.use { it.length } ?: tempFile.length()
-        return Published(itemUri, finalName, finalSize)
+        // tempFile was copied byte-for-byte with no transformation, so its length is the
+        // published file's size -- no need for a second round-trip query to MediaStore.
+        return Published(itemUri, finalName, tempFile.length())
     }
+
+    private fun normalizeRelativePath(path: String): String = if (path.endsWith("/")) path else "$path/"
 
     fun deletePublished(uri: Uri) {
         runCatching { context.contentResolver.delete(uri, null, null) }
@@ -78,6 +78,6 @@ class OutputPublisher(private val context: Context) {
     }
 
     companion object {
-        private const val Environment_MOVIES_RELATIVE_PATH = "Movies/"
+        private const val DEFAULT_RELATIVE_PATH = "Movies/"
     }
 }

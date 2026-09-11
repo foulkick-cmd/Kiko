@@ -5,9 +5,11 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -33,10 +35,6 @@ class MainActivity : ComponentActivity() {
             compressionService = binder.getService()
             isBound = true
             viewModel.observeJobs(binder.getService().jobs)
-            pendingStart?.let { (videos, limitTo30Fps) ->
-                compressionService?.start(videos, limitTo30Fps)
-                pendingStart = null
-            }
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
@@ -106,23 +104,18 @@ class MainActivity : ComponentActivity() {
 
     private fun startCompression(videos: List<SelectedVideo>, limitTo30Fps: Boolean) {
         viewModel.setRunning(true)
-        val intent = Intent(this, CompressionService::class.java)
+        // The service reads the batch from the intent's own extras in onStartCommand and starts
+        // its foreground notification synchronously there -- it never waits on a service-bound
+        // call to begin, which would risk missing Android 14's foreground-service start deadline.
+        val intent = CompressionService.buildStartIntent(this, videos.map { it.uri }, limitTo30Fps)
         ContextCompat.startForegroundService(this, intent)
-        // The service may not be bound yet on a cold start; post the actual start call once bound.
-        if (isBound) {
-            compressionService?.start(videos, limitTo30Fps)
-        } else {
-            pendingStart = videos to limitTo30Fps
-        }
     }
 
-    private var pendingStart: Pair<List<SelectedVideo>, Boolean>? = null
-
-    private fun queryDisplayName(uri: android.net.Uri): String? {
-        val projection = arrayOf(android.provider.MediaStore.Video.Media.DISPLAY_NAME)
+    private fun queryDisplayName(uri: Uri): String? {
+        val projection = arrayOf(MediaStore.Video.Media.DISPLAY_NAME)
         return contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
             if (cursor.moveToFirst()) {
-                val idx = cursor.getColumnIndex(android.provider.MediaStore.Video.Media.DISPLAY_NAME)
+                val idx = cursor.getColumnIndex(MediaStore.Video.Media.DISPLAY_NAME)
                 if (idx >= 0) cursor.getString(idx) else null
             } else {
                 null
@@ -130,7 +123,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun querySize(uri: android.net.Uri): Long {
+    private fun querySize(uri: Uri): Long {
         return contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: 0L
     }
 

@@ -32,6 +32,30 @@ import java.io.File
  * Wraps AndroidX Media3 Transformer to drive the device's hardware HEVC encoder.
  * No software encoding path, no FFmpeg: Transformer's DefaultEncoderFactory always
  * prefers a MediaCodec hardware encoder on the S23 Ultra for H.265 output.
+ *
+ * MEDIA3 1.5.1 API VERIFICATION STATUS (self-review note -- this environment has no Android SDK
+ * and Google's Maven repo is network-blocked here, so nothing below was checked against the
+ * actual library; it is written from training-data recall only). Before building, diff every
+ * one of these against the real androidx.media3:media3-transformer/media3-effect/media3-common
+ * 1.5.1 KDoc/sources. Highest-risk first:
+ *  - FrameDropEffect.createDefaultFrameDropEffect(float): narrowest recall in this file. If this
+ *    method/class doesn't exist as named, search media3-effect for the current frame-rate-capping
+ *    effect and swap it in; the call site is isolated to the `if (limitTo30Fps && ...)` block below.
+ *  - Composition.Builder(...).setHdrMode(Composition.HDR_MODE_KEEP_HDR): class, builder shape and
+ *    the exact constant name are all unverified.
+ *  - VideoEncoderSettings.Builder().setBitrate(Int).setBitrateMode(Int) and the constant
+ *    VideoEncoderSettings.BITRATE_MODE_VBR: method/constant names unverified.
+ *  - DefaultEncoderFactory.Builder(context).setRequestedVideoEncoderSettings(...).setEnableFallback(true):
+ *    method names unverified (this is what is relied on to avoid a hard crash if the requested
+ *    bitrate/profile isn't supported -- see class doc on `compress()`).
+ *  - Transformer.start(Composition, String), Transformer.Listener.onCompleted/onError(Composition,
+ *    ExportResult[, ExportException]), ProgressHolder + Transformer.getProgress(...) polling and
+ *    Transformer.PROGRESS_STATE_AVAILABLE: medium confidence, unverified.
+ *  - MediaItem.fromUri(Uri), MimeTypes.VIDEO_H265, Presentation.createForWidthAndHeight(...) +
+ *    Presentation.LAYOUT_SCALE_TO_FIT, EditedMediaItem.Builder(...).setEffects(...),
+ *    Effects(audioProcessors, videoEffects): high confidence (long-stable, widely-used APIs) but
+ *    still not independently verified in this session.
+ * None of the above should be reported as "verified" until checked against real docs/sources.
  */
 class VideoCompressor(private val context: Context) {
 
