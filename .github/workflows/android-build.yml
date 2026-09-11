@@ -42,16 +42,19 @@ jobs:
 
       # Release signing. Two paths, resolved at runtime and never committed to the repo:
       #  1. If the RELEASE_KEYSTORE_BASE64/RELEASE_KEYSTORE_PASSWORD/RELEASE_KEY_ALIAS/
-      #     RELEASE_KEY_PASSWORD repository secrets are set, that keystore is decoded and used
-      #     (a stable signing identity across builds, so future updates install over old ones).
-      #  2. Otherwise, keytool generates a fresh keystore on the runner itself with a
-      #     runner-generated random password -- no secret to create, no long string to copy.
-      #     This trades away a stable signing identity (each such run's key is different, so an
-      #     APK from one unsigned-secret run won't upgrade-install over another) for a signed,
-      #     installable APK with zero manual secret handling. Add the four secrets above whenever
-      #     a stable identity is wanted.
-      # The generated/decoded password is masked in the log and the keystore file is deleted at
-      # the end of the job either way.
+      #     RELEASE_KEY_PASSWORD repository secrets are set AND the decoded keystore actually
+      #     opens with the given password, use it (a stable signing identity across builds, so
+      #     future updates install over old ones). The keystore is verified openable with
+      #     `keytool -list` before being trusted -- a secret that decodes to something unusable
+      #     (e.g. mangled on copy/paste into the GitHub UI) is logged as a warning and skipped
+      #     rather than failing the whole build.
+      #  2. Otherwise (no secret set, or the secret didn't check out), keytool generates a fresh
+      #     keystore on the runner itself with a runner-generated random password -- no secret to
+      #     create, no long string to copy. This trades away a stable signing identity (each such
+      #     run's key is different, so an APK from one run won't upgrade-install over another) for
+      #     a signed, installable APK with zero manual secret handling.
+      # The password is masked in the log and the keystore file is deleted at the end of the job
+      # either way.
       - name: Prepare release signing
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
@@ -61,15 +64,24 @@ jobs:
         run: |
           set -e
           KEYSTORE_PATH="$RUNNER_TEMP/release.keystore"
+          USE_SECRET=false
 
           if [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
-            echo "Using the RELEASE_KEYSTORE_BASE64 repository secret for signing."
-            echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > "$KEYSTORE_PATH"
-            KS_PASSWORD="$RELEASE_KEYSTORE_PASSWORD"
-            KS_ALIAS="$RELEASE_KEY_ALIAS"
-            KS_KEY_PASSWORD="$RELEASE_KEY_PASSWORD"
-          else
-            echo "No signing secrets found -- generating an ephemeral release keystore for this run."
+            echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > "$KEYSTORE_PATH" 2>/dev/null || true
+            if [ -s "$KEYSTORE_PATH" ] && keytool -list -keystore "$KEYSTORE_PATH" -storepass "$RELEASE_KEYSTORE_PASSWORD" >/dev/null 2>&1; then
+              echo "Using the RELEASE_KEYSTORE_BASE64 repository secret for signing (verified openable)."
+              USE_SECRET=true
+              KS_PASSWORD="$RELEASE_KEYSTORE_PASSWORD"
+              KS_ALIAS="$RELEASE_KEY_ALIAS"
+              KS_KEY_PASSWORD="$RELEASE_KEY_PASSWORD"
+            else
+              echo "::warning::RELEASE_KEYSTORE_BASE64 is set but the decoded keystore could not be opened with RELEASE_KEYSTORE_PASSWORD (corrupted on paste, or a password mismatch). Falling back to an ephemeral runtime-generated keystore instead of failing the build."
+              rm -f "$KEYSTORE_PATH"
+            fi
+          fi
+
+          if [ "$USE_SECRET" = false ]; then
+            echo "Generating an ephemeral release keystore for this run."
             KS_PASSWORD=$(openssl rand -hex 24)
             KS_ALIAS="smartvideocompressor"
             KS_KEY_PASSWORD="$KS_PASSWORD"
