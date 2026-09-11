@@ -6,7 +6,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
@@ -23,6 +26,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import com.foulkick.smartvideocompressor.model.CompressionStatus
 import com.foulkick.smartvideocompressor.model.SelectedVideo
@@ -41,6 +46,7 @@ fun CompressorScreen(
     val limitTo30Fps by viewModel.limitTo30Fps.collectAsState()
     val jobs by viewModel.jobs.collectAsState()
     val isRunning by viewModel.isRunning.collectAsState()
+    val lastCrash by viewModel.lastCrash.collectAsState()
 
     LaunchedEffect(Unit) { onRequestPermissions() }
 
@@ -48,6 +54,11 @@ fun CompressorScreen(
         topBar = { TopAppBar(title = { Text("Smart Video Compressor") }) },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+
+            lastCrash?.let { report ->
+                LastCrashCard(report = report, onDismiss = { viewModel.setLastCrash(null) })
+                androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(8.dp))
+            }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -118,6 +129,29 @@ private fun VideoJobRow(job: VideoJobState) {
                 CompressionStatus.SKIPPED -> Text("Skipped — ${job.message}")
                 CompressionStatus.FAILED -> Text("Failed — ${job.message}")
                 CompressionStatus.CANCELLED -> Text("Cancelled")
+            }
+        }
+    }
+}
+
+/** Shows the previous run's uncaught-exception report so it can be copied out without adb. */
+@Composable
+private fun LastCrashCard(report: String, onDismiss: () -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text("The app crashed last time. Copy this report and send it:", style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = report,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 220.dp)
+                    .verticalScroll(rememberScrollState()),
+            )
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Button(onClick = { clipboard.setText(AnnotatedString(report)) }) { Text("Copy") }
+                Button(onClick = onDismiss) { Text("Dismiss") }
             }
         }
     }

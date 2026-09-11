@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.lifecycle.LifecycleService
@@ -19,6 +20,7 @@ import com.foulkick.smartvideocompressor.R
 import com.foulkick.smartvideocompressor.SmartVideoCompressorApp
 import com.foulkick.smartvideocompressor.model.CompressionStatus
 import com.foulkick.smartvideocompressor.model.VideoJobState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -112,16 +114,32 @@ class CompressionService : LifecycleService() {
                     break
                 }
                 val startTime = System.currentTimeMillis()
-                engine.process(
-                    video = video,
-                    limitTo30Fps = limitTo30Fps,
-                    onUpdate = { updated ->
-                        val withElapsed = updated.copy(elapsedMillis = System.currentTimeMillis() - startTime)
-                        updateJob(index, withElapsed)
-                        updateNotification(withElapsed, index, videos.size)
-                    },
-                    isCancelled = { cancelRequested },
-                )
+                val onUpdate: (VideoJobState) -> Unit = { updated ->
+                    val withElapsed = updated.copy(elapsedMillis = System.currentTimeMillis() - startTime)
+                    updateJob(index, withElapsed)
+                    updateNotification(withElapsed, index, videos.size)
+                }
+                // lifecycleScope has no exception handler: anything the engine doesn't catch would
+                // otherwise take down the whole process instead of failing just this one file.
+                try {
+                    engine.process(
+                        video = video,
+                        limitTo30Fps = limitTo30Fps,
+                        onUpdate = onUpdate,
+                        isCancelled = { cancelRequested },
+                    )
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    Log.e(TAG, "Unexpected error while processing ${video.displayName}", e)
+                    onUpdate(
+                        VideoJobState(
+                            video = video,
+                            status = CompressionStatus.FAILED,
+                            message = "Unexpected error: ${e::class.simpleName}: ${e.message}",
+                        ),
+                    )
+                }
             }
             ServiceCompat.stopForeground(this@CompressionService, ServiceCompat.STOP_FOREGROUND_REMOVE)
             stopSelf()
@@ -188,6 +206,7 @@ class CompressionService : LifecycleService() {
     }
 
     companion object {
+        private const val TAG = "CompressionService"
         private const val NOTIFICATION_ID = 1001
         const val ACTION_START = "com.foulkick.smartvideocompressor.action.START"
         const val ACTION_CANCEL = "com.foulkick.smartvideocompressor.action.CANCEL"

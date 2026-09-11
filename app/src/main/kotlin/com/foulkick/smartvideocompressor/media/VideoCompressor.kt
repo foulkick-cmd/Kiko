@@ -90,49 +90,52 @@ class VideoCompressor(private val context: Context) {
         limitTo30Fps: Boolean,
         onProgress: (Int) -> Unit,
     ): Outcome = coroutineScope {
-        val videoEffects = buildList {
-            add(
-                Presentation.createForWidthAndHeight(
-                    plan.outputWidth,
-                    plan.outputHeight,
-                    Presentation.LAYOUT_SCALE_TO_FIT,
-                ),
-            )
-            if (limitTo30Fps && plan.effectiveFps > 30.0) {
-                add(FrameDropEffect.createDefaultFrameDropEffect(30f))
-            }
-        }
-
-        val editedMediaItem = EditedMediaItem.Builder(MediaItem.fromUri(sourceUri))
-            .setEffects(Effects(/* audioProcessors= */ emptyList(), /* videoEffects= */ videoEffects))
-            .build()
-
-        // Preserve HDR characteristics when the source is HDR; if the device/pipeline cannot
-        // honor this, export fails with an ExportException rather than silently tone-mapping.
-        val composition = Composition.Builder(EditedMediaItemSequence(listOf(editedMediaItem)))
-            .setHdrMode(Composition.HDR_MODE_KEEP_HDR)
-            .build()
-
-        val encoderFactory = DefaultEncoderFactory.Builder(context)
-            .setRequestedVideoEncoderSettings(
-                VideoEncoderSettings.Builder()
-                    .setBitrate(plan.targetBitrateBps)
-                    .setBitrateMode(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
-                    .build(),
-            )
-            // If the hardware encoder rejects the exact requested config, fall back to the
-            // closest supported configuration instead of failing the whole export.
-            .setEnableFallback(true)
-            .build()
-
-        outputFile.parentFile?.mkdirs()
-
+        // Everything -- including building the effects/composition/encoder config, not just the
+        // export itself -- stays inside this try: a Media3 argument/state check failing here must
+        // surface as a per-file failure (spec section 18), never as a process crash.
         try {
+            val videoEffects = buildList {
+                add(
+                    Presentation.createForWidthAndHeight(
+                        plan.outputWidth,
+                        plan.outputHeight,
+                        Presentation.LAYOUT_SCALE_TO_FIT,
+                    ),
+                )
+                if (limitTo30Fps && plan.effectiveFps > 30.0) {
+                    add(FrameDropEffect.createDefaultFrameDropEffect(30f))
+                }
+            }
+
+            val editedMediaItem = EditedMediaItem.Builder(MediaItem.fromUri(sourceUri))
+                .setEffects(Effects(/* audioProcessors= */ emptyList(), /* videoEffects= */ videoEffects))
+                .build()
+
+            // Preserve HDR characteristics when the source is HDR; if the device/pipeline cannot
+            // honor this, export fails with an ExportException rather than silently tone-mapping.
+            val composition = Composition.Builder(EditedMediaItemSequence(listOf(editedMediaItem)))
+                .setHdrMode(Composition.HDR_MODE_KEEP_HDR)
+                .build()
+
+            val encoderFactory = DefaultEncoderFactory.Builder(context)
+                .setRequestedVideoEncoderSettings(
+                    VideoEncoderSettings.Builder()
+                        .setBitrate(plan.targetBitrateBps)
+                        .setBitrateMode(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
+                        .build(),
+                )
+                // If the hardware encoder rejects the exact requested config, fall back to the
+                // closest supported configuration instead of failing the whole export.
+                .setEnableFallback(true)
+                .build()
+
+            outputFile.parentFile?.mkdirs()
+
             runExport(composition, encoderFactory, outputFile, onProgress)
         } catch (e: kotlinx.coroutines.CancellationException) {
             outputFile.delete()
             throw e
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             outputFile.delete()
             Outcome.Failure(describeFailure(e))
         }

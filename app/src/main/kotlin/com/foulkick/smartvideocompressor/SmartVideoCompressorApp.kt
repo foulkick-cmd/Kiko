@@ -9,6 +9,7 @@ class SmartVideoCompressorApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        CrashReporter.install(this)
         createNotificationChannel()
     }
 

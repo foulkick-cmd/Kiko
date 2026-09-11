@@ -25,7 +25,14 @@ class CompressorViewModel : ViewModel() {
     private val _isRunning = MutableStateFlow(false)
     val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
 
+    private val _lastCrash = MutableStateFlow<String?>(null)
+    val lastCrash: StateFlow<String?> = _lastCrash.asStateFlow()
+
     private var jobsObserver: Job? = null
+
+    fun setLastCrash(report: String?) {
+        _lastCrash.value = report
+    }
 
     fun setSelectedVideos(videos: List<SelectedVideo>) {
         _selectedVideos.value = videos

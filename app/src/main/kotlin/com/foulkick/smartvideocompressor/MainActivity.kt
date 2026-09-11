@@ -46,6 +46,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        CrashReporter.readAndClear(this)?.let { viewModel.setLastCrash(it) }
+
         setContent {
             val pickVideosLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.PickMultipleVisualMedia(MAX_VIDEOS),
