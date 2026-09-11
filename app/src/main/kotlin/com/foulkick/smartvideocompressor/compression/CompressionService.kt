@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.os.Binder
+import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -84,11 +85,21 @@ class CompressionService : LifecycleService() {
 
         // Promote to foreground immediately, before any suspending work, so the OS-mandated
         // start deadline is always met regardless of how long metadata resolution takes.
+        //
+        // FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING only exists on Android 15+ (API 35). Passing
+        // it on Android 14 (API 34) -- the S23 Ultra's spec target -- makes startForeground()
+        // throw, which crashed the app the moment "Compress" was tapped. Fall back to dataSync
+        // there; both types are declared in the manifest.
+        val foregroundServiceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING
+        } else {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        }
         ServiceCompat.startForeground(
             this,
             NOTIFICATION_ID,
             buildNotification(currentFileName = null, currentPercent = 0, overallDone = 0, overallTotal = uris.size),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING,
+            foregroundServiceType,
         )
 
         batchJob = lifecycleScope.launch {

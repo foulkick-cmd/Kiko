@@ -15,6 +15,8 @@ import com.foulkick.smartvideocompressor.model.VideoJobState
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** Runs the full per-video pipeline: probe -> skip check -> compress -> validate -> publish. */
 class CompressionEngine(context: Context) {
@@ -27,12 +29,14 @@ class CompressionEngine(context: Context) {
     private val locationResolver = SourceLocationResolver(appContext)
 
     /** Resolves the display name/size needed to show and process a batch, from bare Uris. */
-    fun resolveSelectedVideos(uris: List<Uri>): List<SelectedVideo> = uris.map { uri ->
-        SelectedVideo(
-            uri = uri,
-            displayName = locationResolver.displayName(uri),
-            sizeBytes = metadataExtractor.sizeBytes(uri).coerceAtLeast(0L),
-        )
+    suspend fun resolveSelectedVideos(uris: List<Uri>): List<SelectedVideo> = withContext(Dispatchers.IO) {
+        uris.map { uri ->
+            SelectedVideo(
+                uri = uri,
+                displayName = locationResolver.displayName(uri),
+                sizeBytes = metadataExtractor.sizeBytes(uri).coerceAtLeast(0L),
+            )
+        }
     }
 
     suspend fun process(
@@ -44,8 +48,10 @@ class CompressionEngine(context: Context) {
         var state = VideoJobState(video = video, status = CompressionStatus.PROBING)
         onUpdate(state)
 
+        // MediaMetadataRetriever/MediaExtractor are blocking I/O; the service's lifecycleScope runs
+        // on the main thread, so probing must be moved off it or a large 4K file stalls the UI.
         val probe = try {
-            metadataExtractor.probe(video.uri)
+            withContext(Dispatchers.IO) { metadataExtractor.probe(video.uri) }
         } catch (e: VideoMetadataExtractor.UnreadableSourceException) {
             return state.copy(status = CompressionStatus.FAILED, message = e.message ?: "Invalid source file")
                 .also(onUpdate)
@@ -90,7 +96,11 @@ class CompressionEngine(context: Context) {
                 state.copy(status = CompressionStatus.FAILED, message = outcome.reason).also(onUpdate)
             }
             is VideoCompressor.Outcome.Success -> {
-                finishSuccessfulExport(state, video, probe, plan, tempOutput, onUpdate)
+                // Validation re-parses the output and publishing copies it into MediaStore -- both
+                // blocking I/O, kept off the main thread like the probe above.
+                withContext(Dispatchers.IO) {
+                    finishSuccessfulExport(state, video, probe, plan, tempOutput, onUpdate)
+                }
             }
         }
     }

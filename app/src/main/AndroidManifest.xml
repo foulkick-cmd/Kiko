@@ -12,7 +12,13 @@
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!--
+        mediaProcessing is the right FGS type for this app but only exists on Android 15+ (API 35);
+        on Android 14 (API 34, the S23 Ultra's spec target) the service falls back to dataSync.
+        Both types (and both type permissions) must be declared here for either to be usable.
+    -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <!-- The app only ever encodes with the device's hardware HEVC encoder. -->
     <uses-feature
@@ -44,7 +50,7 @@
         <service
             android:name=".compression.CompressionService"
             android:exported="false"
-            android:foregroundServiceType="mediaProcessing" />
+            android:foregroundServiceType="mediaProcessing|dataSync" />
 
     </application>
 
