@@ -22,6 +22,12 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+
+        // Short git commit of the build, shown in the app's title bar so the installed build can
+        // be identified without ambiguity (every CI run publishes an artifact with the same name).
+        // GITHUB_SHA is set on GitHub Actions runners; local builds show "local".
+        val gitSha = System.getenv("GITHUB_SHA")?.take(7) ?: "local"
+        buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
     }
 
     // Release signing, sourced entirely from environment variables so no credentials are ever
@@ -68,6 +74,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {

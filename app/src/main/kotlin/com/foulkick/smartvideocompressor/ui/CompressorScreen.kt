@@ -29,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
+import com.foulkick.smartvideocompressor.BuildConfig
 import com.foulkick.smartvideocompressor.model.CompressionStatus
 import com.foulkick.smartvideocompressor.model.SelectedVideo
 import com.foulkick.smartvideocompressor.model.VideoJobState
@@ -51,7 +52,7 @@ fun CompressorScreen(
     LaunchedEffect(Unit) { onRequestPermissions() }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Smart Video Compressor") }) },
+        topBar = { TopAppBar(title = { Text("Smart Video Compressor · build ${BuildConfig.GIT_SHA}") }) },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
 
