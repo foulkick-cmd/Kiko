@@ -1,5 +1,6 @@
 package com.foulkick.smartvideocompressor.ui
 
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.foulkick.smartvideocompressor.model.CompressionStatus
@@ -32,6 +33,15 @@ class CompressorViewModel : ViewModel() {
 
     private val _sortOrder = MutableStateFlow(SortOrder.SELECTION)
     val sortOrder: StateFlow<SortOrder> = _sortOrder.asStateFlow()
+
+    // Original-file deletion is tracked separately from the service's job flow (not folded into
+    // VideoJobState) so it can't be clobbered by a later, unrelated emission from the service.
+    private val _deletedOriginals = MutableStateFlow<Set<Uri>>(emptySet())
+    val deletedOriginals: StateFlow<Set<Uri>> = _deletedOriginals.asStateFlow()
+
+    fun markOriginalDeleted(uri: Uri) {
+        _deletedOriginals.value = _deletedOriginals.value + uri
+    }
 
     private var jobsObserver: Job? = null
 
@@ -68,13 +78,21 @@ class CompressorViewModel : ViewModel() {
      * Subscribes to the bound service's job flow. Safe to call more than once (e.g. the
      * Activity re-binds on every onStart): a prior subscription is cancelled first so we never
      * accumulate duplicate collectors on the same underlying flow.
+     *
+     * Ignores empty snapshots: the service calls stopSelf() once a batch finishes, so returning
+     * to the app later re-binds to a brand-new service instance whose job list starts empty --
+     * without this guard that empty snapshot overwrote the just-finished results, and the UI fell
+     * back to re-deriving all-QUEUED rows from selectedVideos, making it look like the whole batch
+     * had been silently reset. The only place jobs should ever go back to empty is a fresh
+     * selection (setSelectedVideos), which already clears it explicitly.
      */
     fun observeJobs(flow: StateFlow<List<VideoJobState>>) {
         jobsObserver?.cancel()
         jobsObserver = viewModelScope.launch {
             flow.collect { updated ->
+                if (updated.isEmpty()) return@collect
                 _jobs.value = updated
-                if (updated.isNotEmpty() && updated.all { it.status.isTerminal() }) {
+                if (updated.all { it.status.isTerminal() }) {
                     _isRunning.value = false
                 }
             }

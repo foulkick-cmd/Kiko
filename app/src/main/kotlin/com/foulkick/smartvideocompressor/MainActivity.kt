@@ -9,16 +9,22 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.provider.DocumentsContract
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.ActivityResult
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
 import com.foulkick.smartvideocompressor.compression.CompressionService
 import com.foulkick.smartvideocompressor.model.SelectedVideo
+import com.foulkick.smartvideocompressor.model.VideoJobState
 import com.foulkick.smartvideocompressor.ui.CompressorScreen
 import com.foulkick.smartvideocompressor.ui.CompressorViewModel
 
@@ -28,6 +34,10 @@ class MainActivity : ComponentActivity() {
 
     private var compressionService: CompressionService? = null
     private var isBound = false
+
+    // Set right before launching the MediaStore delete-confirmation flow so the async callback
+    // knows which video's original to mark deleted once the user approves it.
+    private var pendingOriginalDeleteUri: Uri? = null
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, service: IBinder) {
@@ -74,6 +84,22 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            // Deleting a video this app doesn't own (the normal case for an original from the
+            // Gallery/another app) throws RecoverableSecurityException on a direct
+            // ContentResolver.delete call on API 30+; MediaStore.createDeleteRequest is the
+            // correct replacement -- it shows the system's own confirmation dialog and performs
+            // the deletion itself once approved. minSdk is 33, so this is always available; no
+            // legacy fallback branch is needed.
+            val deleteOriginalLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.StartIntentSenderForResult(),
+            ) { result ->
+                val uri = pendingOriginalDeleteUri
+                pendingOriginalDeleteUri = null
+                if (result.resultCode == RESULT_OK && uri != null) {
+                    viewModel.markOriginalDeleted(uri)
+                }
+            }
+
             val notificationPermissionLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.RequestPermission(),
             ) { /* no-op: notification is a nice-to-have, not required for compression to run */ }
@@ -100,6 +126,7 @@ class MainActivity : ComponentActivity() {
                     startCompression(videos, limitTo30Fps)
                 },
                 onCancelCompression = { compressionService?.cancel() },
+                onDeleteOriginal = { job -> deleteOriginal(job, deleteOriginalLauncher) },
             )
         }
     }
@@ -124,6 +151,25 @@ class MainActivity : ComponentActivity() {
         // call to begin, which would risk missing Android 14's foreground-service start deadline.
         val intent = CompressionService.buildStartIntent(this, videos.map { it.uri }, limitTo30Fps)
         ContextCompat.startForegroundService(this, intent)
+    }
+
+    private fun deleteOriginal(
+        job: VideoJobState,
+        deleteOriginalLauncher: ManagedActivityResultLauncher<IntentSenderRequest, ActivityResult>,
+    ) {
+        val uri = job.video.uri
+        if (DocumentsContract.isDocumentUri(this, uri)) {
+            // A Browse-Files (SAF) pick: the app itself holds the persisted grant, and
+            // DocumentsContract.deleteDocument performs the delete directly with no system
+            // confirmation UI of its own -- CompressorScreen's own confirm step covers that.
+            if (runCatching { DocumentsContract.deleteDocument(contentResolver, uri) }.getOrDefault(false)) {
+                viewModel.markOriginalDeleted(uri)
+            }
+        } else {
+            pendingOriginalDeleteUri = uri
+            val pendingIntent = MediaStore.createDeleteRequest(contentResolver, listOf(uri))
+            deleteOriginalLauncher.launch(IntentSenderRequest.Builder(pendingIntent.intentSender).build())
+        }
     }
 
     private fun toSelectedVideo(uri: Uri): SelectedVideo {

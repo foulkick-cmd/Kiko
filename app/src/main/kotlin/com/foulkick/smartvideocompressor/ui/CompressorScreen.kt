@@ -25,7 +25,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -44,6 +46,7 @@ fun CompressorScreen(
     onRequestPermissions: () -> Unit,
     onStartCompression: (List<SelectedVideo>, Boolean) -> Unit,
     onCancelCompression: () -> Unit,
+    onDeleteOriginal: (VideoJobState) -> Unit,
 ) {
     val selectedVideos by viewModel.selectedVideos.collectAsState()
     val limitTo30Fps by viewModel.limitTo30Fps.collectAsState()
@@ -51,6 +54,7 @@ fun CompressorScreen(
     val isRunning by viewModel.isRunning.collectAsState()
     val lastCrash by viewModel.lastCrash.collectAsState()
     val sortOrder by viewModel.sortOrder.collectAsState()
+    val deletedOriginals by viewModel.deletedOriginals.collectAsState()
 
     LaunchedEffect(Unit) { onRequestPermissions() }
 
@@ -120,14 +124,24 @@ fun CompressorScreen(
             val displayList = if (jobs.isNotEmpty()) jobs else orderedSelection.map { VideoJobState(video = it) }
 
             LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(displayList) { job -> VideoJobRow(job) }
+                items(displayList, key = { it.video.uri.toString() }) { job ->
+                    VideoJobRow(
+                        job = job,
+                        isOriginalDeleted = job.video.uri in deletedOriginals,
+                        onDeleteOriginal = { onDeleteOriginal(job) },
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-private fun VideoJobRow(job: VideoJobState) {
+private fun VideoJobRow(
+    job: VideoJobState,
+    isOriginalDeleted: Boolean,
+    onDeleteOriginal: () -> Unit,
+) {
     Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Column(modifier = Modifier.padding(12.dp)) {
             Text(job.video.displayName, style = MaterialTheme.typography.titleMedium)
@@ -150,12 +164,37 @@ private fun VideoJobRow(job: VideoJobState) {
                     val percent = job.percentSaved?.let { "%.1f".format(it) } ?: "?"
                     Text("$original → $output")
                     Text("$percent% saved · ${formatElapsed(job.elapsedMillis)}")
+                    DeleteOriginalControl(isOriginalDeleted = isOriginalDeleted, onConfirmDelete = onDeleteOriginal)
                 }
                 CompressionStatus.SKIPPED -> Text("Skipped — ${job.message}")
                 CompressionStatus.FAILED -> Text("Failed — ${job.message}")
                 CompressionStatus.CANCELLED -> Text("Cancelled")
             }
         }
+    }
+}
+
+/**
+ * Two-step control shown once a video finishes successfully: tapping "Delete Original" asks for
+ * an explicit Confirm before doing anything irreversible (the source file is gone either way this
+ * ends -- a SAF-picked file has no OS confirmation of its own, so this app-level step is the only
+ * safety net for that path; for a MediaStore original the system also shows its own confirmation
+ * dialog on top of this one).
+ */
+@Composable
+private fun DeleteOriginalControl(isOriginalDeleted: Boolean, onConfirmDelete: () -> Unit) {
+    if (isOriginalDeleted) {
+        Text("Original deleted", style = MaterialTheme.typography.bodySmall)
+        return
+    }
+    var confirming by remember { mutableStateOf(false) }
+    if (confirming) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { confirming = false; onConfirmDelete() }) { Text("Confirm delete") }
+            Button(onClick = { confirming = false }) { Text("Cancel") }
+        }
+    } else {
+        Button(onClick = { confirming = true }) { Text("Delete Original") }
     }
 }
 

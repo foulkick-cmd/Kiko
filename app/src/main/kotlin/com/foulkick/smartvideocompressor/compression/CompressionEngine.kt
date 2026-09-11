@@ -28,6 +28,19 @@ class CompressionEngine(context: Context) {
     private val publisher = OutputPublisher(appContext)
     private val locationResolver = SourceLocationResolver(appContext)
 
+    // filesDir, not cacheDir: cacheDir is documented as reclaimable by the OS at any time under
+    // storage pressure, and a batch of large 4K temp outputs processed back-to-back is exactly
+    // the situation that triggers it -- this is the real cause behind "Output validation failed:
+    // Output file does not exist" turning up partway through a big batch. filesDir isn't
+    // auto-evicted; we still delete every temp file ourselves in every code path below.
+    private val tempDir = File(appContext.filesDir, "compress_tmp").apply {
+        mkdirs()
+        // Unlike cacheDir, nothing here is auto-cleared -- a temp file orphaned by a killed
+        // process/crash would otherwise sit forever. Safe to sweep on every engine startup since
+        // this directory only ever holds in-flight temp outputs, never anything durable.
+        listFiles()?.forEach { it.delete() }
+    }
+
     /** Resolves the display name/size needed to show and process a batch, from bare Uris. */
     suspend fun resolveSelectedVideos(uris: List<Uri>): List<SelectedVideo> = withContext(Dispatchers.IO) {
         uris.map { uri ->
@@ -73,7 +86,7 @@ class CompressionEngine(context: Context) {
         state = state.copy(status = CompressionStatus.COMPRESSING)
         onUpdate(state)
 
-        val tempOutput = File(appContext.cacheDir, "compress_${UUID.randomUUID()}.mp4")
+        val tempOutput = File(tempDir, "compress_${UUID.randomUUID()}.mp4")
         val outcome = try {
             compressor.compress(
                 sourceUri = video.uri,
