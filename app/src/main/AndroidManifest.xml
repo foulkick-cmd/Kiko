@@ -4,7 +4,7 @@
     <!--
         Minimum permission set. No INTERNET (app is 100% local/offline).
         READ_MEDIA_VIDEO is the modern, scoped media permission (not legacy
-        READ/WRITE_EXTERNAL_STORAGE) -- requested only so the app can resolve the
+        READ/WRITE_EXTERNAL_STORAGE); requested only so the app can resolve the
         *real* MediaStore row (folder, size) behind a Photo-Picker selection well
         enough to save the compressed output in the same folder as the original.
         Selection itself works via the Photo Picker without this permission.
