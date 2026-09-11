@@ -1,8 +1,8 @@
 package com.foulkick.smartvideocompressor.media
 
 import android.content.Context
+import android.media.MediaCodecInfo
 import android.net.Uri
-import androidx.media3.common.Effects
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.effect.FrameDropEffect
@@ -11,6 +11,7 @@ import androidx.media3.transformer.Composition
 import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
+import androidx.media3.transformer.Effects
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
@@ -34,29 +35,23 @@ import java.io.File
  * No software encoding path, no FFmpeg: Transformer's DefaultEncoderFactory always
  * prefers a MediaCodec hardware encoder on the S23 Ultra for H.265 output.
  *
- * MEDIA3 1.5.1 API VERIFICATION STATUS (self-review note -- this environment has no Android SDK
- * and Google's Maven repo is network-blocked here, so nothing below was checked against the
- * actual library; it is written from training-data recall only). Before building, diff every
- * one of these against the real androidx.media3:media3-transformer/media3-effect/media3-common
- * 1.5.1 KDoc/sources. Highest-risk first:
- *  - FrameDropEffect.createDefaultFrameDropEffect(float): narrowest recall in this file. If this
- *    method/class doesn't exist as named, search media3-effect for the current frame-rate-capping
- *    effect and swap it in; the call site is isolated to the `if (limitTo30Fps && ...)` block below.
- *  - Composition.Builder(...).setHdrMode(Composition.HDR_MODE_KEEP_HDR): class, builder shape and
- *    the exact constant name are all unverified.
- *  - VideoEncoderSettings.Builder().setBitrate(Int).setBitrateMode(Int) and the constant
- *    VideoEncoderSettings.BITRATE_MODE_VBR: method/constant names unverified.
- *  - DefaultEncoderFactory.Builder(context).setRequestedVideoEncoderSettings(...).setEnableFallback(true):
- *    method names unverified (this is what is relied on to avoid a hard crash if the requested
- *    bitrate/profile isn't supported -- see class doc on `compress()`).
- *  - Transformer.start(Composition, String), Transformer.Listener.onCompleted/onError(Composition,
- *    ExportResult[, ExportException]), ProgressHolder + Transformer.getProgress(...) polling and
- *    Transformer.PROGRESS_STATE_AVAILABLE: medium confidence, unverified.
- *  - MediaItem.fromUri(Uri), MimeTypes.VIDEO_H265, Presentation.createForWidthAndHeight(...) +
- *    Presentation.LAYOUT_SCALE_TO_FIT, EditedMediaItem.Builder(...).setEffects(...),
- *    Effects(audioProcessors, videoEffects): high confidence (long-stable, widely-used APIs) but
- *    still not independently verified in this session.
- * None of the above should be reported as "verified" until checked against real docs/sources.
+ * MEDIA3 1.5.1 API VERIFICATION STATUS (self-review note). This environment has no Android SDK
+ * and Google's Maven repo is network-blocked here, so this file was originally written from
+ * unverifiable training-data recall. A real CI build (GitHub Actions, which does have SDK +
+ * Maven access) surfaced actual compiler errors, and a javap-based diagnostic against the real
+ * downloaded media3-1.5.1 jars confirmed the following corrections against the initial guesses:
+ *  - Effects lives in androidx.media3.transformer (not androidx.media3.common as first guessed).
+ *  - VideoEncoderSettings has no bitrate-mode constant of its own; bitrateMode is a plain int,
+ *    and the real value is android.media.MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR
+ *    (confirmed present on the platform's android-35 android.jar).
+ *  - FrameDropEffect (androidx.media3.effect) confirmed to exist with
+ *    createDefaultFrameDropEffect(float) and createSimpleFrameDropEffect(float, float).
+ * Still not independently verified (will be resolved by the next real build's compiler output,
+ * not by further guessing): Composition/Composition.Builder/HDR_MODE_KEEP_HDR,
+ * DefaultEncoderFactory.Builder's exact method names (setRequestedVideoEncoderSettings,
+ * setEnableFallback), EditedMediaItem/EditedMediaItemSequence builder shapes,
+ * Transformer.Builder/Transformer.Listener/ProgressHolder/PROGRESS_STATE_AVAILABLE, and
+ * Transformer.start(Composition, String).
  */
 class VideoCompressor(private val context: Context) {
 
@@ -122,7 +117,7 @@ class VideoCompressor(private val context: Context) {
             .setRequestedVideoEncoderSettings(
                 VideoEncoderSettings.Builder()
                     .setBitrate(plan.targetBitrateBps)
-                    .setBitrateMode(VideoEncoderSettings.BITRATE_MODE_VBR)
+                    .setBitrateMode(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
                     .build(),
             )
             // If the hardware encoder rejects the exact requested config, fall back to the
