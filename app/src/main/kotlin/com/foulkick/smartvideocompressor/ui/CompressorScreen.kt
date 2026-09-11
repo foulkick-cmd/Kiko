@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
@@ -40,6 +41,7 @@ import com.foulkick.smartvideocompressor.model.VideoJobState
 fun CompressorScreen(
     viewModel: CompressorViewModel,
     onPickVideos: () -> Unit,
+    onBrowseFiles: () -> Unit,
     onRequestPermissions: () -> Unit,
     onStartCompression: (List<SelectedVideo>, Boolean) -> Unit,
     onCancelCompression: () -> Unit,
@@ -73,8 +75,13 @@ fun CompressorScreen(
 
             androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(8.dp))
 
-            Button(onClick = onPickVideos, enabled = !isRunning, modifier = Modifier.fillMaxWidth()) {
-                Text("Select Videos")
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onPickVideos, enabled = !isRunning, modifier = Modifier.weight(1f)) {
+                    Text("Select Videos")
+                }
+                Button(onClick = onBrowseFiles, enabled = !isRunning, modifier = Modifier.weight(1f)) {
+                    Text("Browse Files")
+                }
             }
 
             androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(4.dp))

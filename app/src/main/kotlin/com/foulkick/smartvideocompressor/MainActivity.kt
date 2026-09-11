@@ -9,7 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
-import android.provider.MediaStore
+import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -53,12 +53,24 @@ class MainActivity : ComponentActivity() {
                 contract = ActivityResultContracts.PickMultipleVisualMedia(MAX_VIDEOS),
             ) { uris ->
                 if (uris.isNotEmpty()) {
-                    val videos = uris.map { uri ->
-                        val displayName = queryDisplayName(uri) ?: uri.lastPathSegment ?: "video.mp4"
-                        val size = querySize(uri)
-                        SelectedVideo(uri = uri, displayName = displayName, sizeBytes = size)
+                    viewModel.setSelectedVideos(uris.map { toSelectedVideo(it) })
+                }
+            }
+
+            // The Photo Picker only surfaces MediaStore-indexed Gallery items; a video sitting in
+            // Downloads, a WhatsApp folder, or anywhere else the Gallery doesn't index is invisible
+            // to it. This uses the system file picker (Storage Access Framework) instead, which can
+            // reach any folder/provider without a broad storage permission.
+            val browseFilesLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.OpenMultipleDocuments(),
+            ) { uris ->
+                if (uris.isNotEmpty()) {
+                    uris.forEach { uri ->
+                        runCatching {
+                            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
                     }
-                    viewModel.setSelectedVideos(videos)
+                    viewModel.setSelectedVideos(uris.map { toSelectedVideo(it) })
                 }
             }
 
@@ -77,6 +89,7 @@ class MainActivity : ComponentActivity() {
                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly),
                     )
                 },
+                onBrowseFiles = { browseFilesLauncher.launch(arrayOf("video/*")) },
                 onRequestPermissions = {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -113,11 +126,21 @@ class MainActivity : ComponentActivity() {
         ContextCompat.startForegroundService(this, intent)
     }
 
+    private fun toSelectedVideo(uri: Uri): SelectedVideo {
+        val displayName = queryDisplayName(uri) ?: uri.lastPathSegment ?: "video.mp4"
+        return SelectedVideo(uri = uri, displayName = displayName, sizeBytes = querySize(uri))
+    }
+
+    // OpenableColumns (not MediaStore.*) is the universal projection every content provider that
+    // supports openInputStream/openFileDescriptor is required to honor -- MediaStore's own
+    // DISPLAY_NAME/SIZE columns resolve to the exact same underlying keys, so this one query path
+    // works identically for Photo Picker (MediaStore) and file-picker (arbitrary DocumentsProvider)
+    // results.
     private fun queryDisplayName(uri: Uri): String? {
-        val projection = arrayOf(MediaStore.Video.Media.DISPLAY_NAME)
+        val projection = arrayOf(OpenableColumns.DISPLAY_NAME)
         return contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
             if (cursor.moveToFirst()) {
-                val idx = cursor.getColumnIndex(MediaStore.Video.Media.DISPLAY_NAME)
+                val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                 if (idx >= 0) cursor.getString(idx) else null
             } else {
                 null
@@ -126,7 +149,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun querySize(uri: Uri): Long {
-        return contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: 0L
+        val projection = arrayOf(OpenableColumns.SIZE)
+        val fromQuery = contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val idx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (idx >= 0 && !cursor.isNull(idx)) cursor.getLong(idx) else null
+            } else {
+                null
+            }
+        }
+        return fromQuery ?: (contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: 0L)
     }
 
     companion object {
