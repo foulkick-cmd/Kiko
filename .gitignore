@@ -9,3 +9,10 @@
 .cxx/
 local.properties
 **/build/
+
+# Release signing material must never be committed -- see android-build.yml for how CI
+# supplies it via GitHub Actions secrets instead.
+*.keystore
+*.jks
+release-keystore*
+keystore.properties

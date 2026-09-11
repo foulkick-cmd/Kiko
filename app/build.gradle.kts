@@ -24,6 +24,22 @@ android {
         vectorDrawables.useSupportLibrary = true
     }
 
+    // Release signing, sourced entirely from environment variables so no credentials are ever
+    // committed. In CI these are populated from GitHub Actions secrets (see android-build.yml);
+    // locally, if unset, the release build type simply has no signingConfig applied and Gradle
+    // produces the normal unsigned artifact -- this never breaks a plain local build.
+    val releaseKeystorePath = System.getenv("RELEASE_KEYSTORE_PATH")
+    signingConfigs {
+        if (releaseKeystorePath != null) {
+            create("release") {
+                storeFile = file(releaseKeystorePath)
+                storePassword = System.getenv("RELEASE_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("RELEASE_KEY_ALIAS")
+                keyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             // Left off for now: several Media3 APIs used in this project are unverified against
@@ -32,6 +48,9 @@ android {
             // once there's a known-green build.
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (releaseKeystorePath != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
         debug {
             isMinifyEnabled = false

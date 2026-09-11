@@ -40,8 +40,46 @@ jobs:
       - name: Run core-logic unit tests
         run: ./gradlew :core-logic:test --no-daemon --stacktrace
 
+      # Decodes the release keystore from a repository secret into a runner-local file. The
+      # keystore itself is never committed to the repo -- only this base64 blob lives in GitHub
+      # Actions secrets (Settings > Secrets and variables > Actions):
+      #   RELEASE_KEYSTORE_BASE64, RELEASE_KEYSTORE_PASSWORD, RELEASE_KEY_ALIAS, RELEASE_KEY_PASSWORD
+      - name: Decode release keystore
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$RELEASE_KEYSTORE_BASE64" ]; then
+            echo "::error::RELEASE_KEYSTORE_BASE64 secret is not set. Add the release signing secrets to this repository before running this workflow -- see the signing setup notes."
+            exit 1
+          fi
+          echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+
       - name: Build release APK
+        env:
+          RELEASE_KEYSTORE_PATH: ${{ runner.temp }}/release.keystore
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Verify APK signature
+        run: |
+          APK=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+          if [ -z "$APK" ]; then
+            echo "::error::No APK found under app/build/outputs/apk/release"
+            exit 1
+          fi
+          echo "Resolved APK: $APK"
+          BUILD_TOOLS_DIR=$(find "$ANDROID_HOME/build-tools" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -1)
+          APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
+          echo "Using apksigner: $APKSIGNER"
+          "$APKSIGNER" verify --print-certs "$APK"
+          echo "=== SHA-256 ==="
+          sha256sum "$APK"
+
+      - name: Clean up decoded keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.keystore"
 
       - name: Upload release APK
         uses: actions/upload-artifact@v4
