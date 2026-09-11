@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Simple play-triangle-in-downward-arrow glyph representing "compress video". -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M40,30 L74,54 L40,78 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M22,86 L86,86 L86,94 L22,94 Z" />
+</vector>

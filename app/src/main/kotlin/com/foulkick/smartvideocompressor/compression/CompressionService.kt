@@ -1,0 +1,162 @@
+package com.foulkick.smartvideocompressor.compression
+
+import android.app.Notification
+import android.app.PendingIntent
+import android.content.Intent
+import android.os.Binder
+import android.os.IBinder
+import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
+import androidx.lifecycle.LifecycleService
+import androidx.lifecycle.lifecycleScope
+import com.foulkick.smartvideocompressor.MainActivity
+import com.foulkick.smartvideocompressor.R
+import com.foulkick.smartvideocompressor.SmartVideoCompressorApp
+import com.foulkick.smartvideocompressor.model.CompressionStatus
+import com.foulkick.smartvideocompressor.model.SelectedVideo
+import com.foulkick.smartvideocompressor.model.VideoJobState
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+
+/**
+ * Runs the compression batch sequentially (one video at a time, by design -- see spec section
+ * 15) as a foreground service of type mediaProcessing, so it survives the screen turning off
+ * or the app going to background, with a persistent progress notification.
+ */
+class CompressionService : LifecycleService() {
+
+    private val binder = LocalBinder()
+    private lateinit var engine: CompressionEngine
+
+    private val _jobs = MutableStateFlow<List<VideoJobState>>(emptyList())
+    val jobs: StateFlow<List<VideoJobState>> = _jobs.asStateFlow()
+
+    private var limitTo30Fps: Boolean = false
+    @Volatile private var cancelRequested: Boolean = false
+    private var batchJob: kotlinx.coroutines.Job? = null
+
+    inner class LocalBinder : Binder() {
+        fun getService(): CompressionService = this@CompressionService
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        engine = CompressionEngine(this)
+    }
+
+    override fun onBind(intent: Intent): IBinder {
+        super.onBind(intent)
+        return binder
+    }
+
+    fun start(videos: List<SelectedVideo>, limitTo30Fps: Boolean) {
+        if (batchJob?.isActive == true) return
+        this.limitTo30Fps = limitTo30Fps
+        cancelRequested = false
+        _jobs.value = videos.map { VideoJobState(video = it) }
+
+        ServiceCompat.startForeground(
+            this,
+            NOTIFICATION_ID,
+            buildNotification(currentFileName = null, currentPercent = 0, overallDone = 0, overallTotal = videos.size),
+            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING,
+        )
+
+        batchJob = lifecycleScope.launch {
+            for ((index, video) in videos.withIndex()) {
+                if (cancelRequested) {
+                    markRemaining(from = index, status = CompressionStatus.CANCELLED)
+                    break
+                }
+                val startTime = System.currentTimeMillis()
+                engine.process(
+                    video = video,
+                    limitTo30Fps = this@CompressionService.limitTo30Fps,
+                    onUpdate = { updated ->
+                        val withElapsed = updated.copy(elapsedMillis = System.currentTimeMillis() - startTime)
+                        updateJob(index, withElapsed)
+                        updateNotification(withElapsed, index, videos.size)
+                    },
+                    isCancelled = { cancelRequested },
+                )
+            }
+            ServiceCompat.stopForeground(this@CompressionService, ServiceCompat.STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
+    }
+
+    fun cancel() {
+        cancelRequested = true
+        batchJob?.cancel()
+    }
+
+    private fun updateJob(index: Int, state: VideoJobState) {
+        _jobs.update { current ->
+            current.toMutableList().also { it[index] = state }
+        }
+    }
+
+    private fun markRemaining(from: Int, status: CompressionStatus) {
+        _jobs.update { current ->
+            current.mapIndexed { i, job -> if (i >= from) job.copy(status = status) else job }
+        }
+    }
+
+    private fun updateNotification(current: VideoJobState, index: Int, total: Int) {
+        val notification = buildNotification(
+            currentFileName = current.video.displayName,
+            currentPercent = current.progressPercent,
+            overallDone = index,
+            overallTotal = total,
+        )
+        val manager = getSystemService(android.app.NotificationManager::class.java)
+        manager.notify(NOTIFICATION_ID, notification)
+    }
+
+    private fun buildNotification(
+        currentFileName: String?,
+        currentPercent: Int,
+        overallDone: Int,
+        overallTotal: Int,
+    ): Notification {
+        val contentIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val cancelIntent = PendingIntent.getService(
+            this,
+            0,
+            Intent(this, CompressionService::class.java).setAction(ACTION_CANCEL),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+
+        return NotificationCompat.Builder(this, SmartVideoCompressorApp.COMPRESSION_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle(currentFileName ?: getString(R.string.app_name))
+            .setContentText("Video ${overallDone + 1} of $overallTotal — $currentPercent%")
+            .setProgress(100, currentPercent, false)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setContentIntent(contentIntent)
+            .addAction(0, "Cancel", cancelIntent)
+            .build()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        super.onStartCommand(intent, flags, startId)
+        if (intent?.action == ACTION_CANCEL) {
+            cancel()
+        }
+        return START_NOT_STICKY
+    }
+
+    companion object {
+        private const val NOTIFICATION_ID = 1001
+        const val ACTION_CANCEL = "com.foulkick.smartvideocompressor.action.CANCEL"
+    }
+}

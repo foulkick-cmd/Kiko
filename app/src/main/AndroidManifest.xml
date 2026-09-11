@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        Minimum permission set. No INTERNET (app is 100% local/offline).
+        READ_MEDIA_VIDEO is the modern, scoped media permission (not legacy
+        READ/WRITE_EXTERNAL_STORAGE) -- requested only so the app can resolve the
+        *real* MediaStore row (folder, size) behind a Photo-Picker selection well
+        enough to save the compressed output in the same folder as the original.
+        Selection itself works via the Photo Picker without this permission.
+    -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
+
+    <!-- The app only ever encodes with the device's hardware HEVC encoder. -->
+    <uses-feature
+        android:name="android.hardware.hardware_keystore"
+        android:required="false" />
+
+    <application
+        android:name=".SmartVideoCompressorApp"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.SmartVideoCompressor"
+        android:hasFragileUserData="false"
+        android:extractNativeLibs="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.SmartVideoCompressor"
+            android:screenOrientation="portrait">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".compression.CompressionService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProcessing" />
+
+    </application>
+
+</manifest>
