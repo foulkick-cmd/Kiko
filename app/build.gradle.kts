@@ -6,7 +6,10 @@ plugins {
 
 android {
     namespace = "com.foulkick.smartvideocompressor"
-    compileSdk = 34
+    // media3 1.5.1's AAR metadata requires compileSdk >= 35 (confirmed by a real CI build
+    // failure). compileSdk is independent of targetSdk: compiling against newer APIs doesn't
+    // change the app's runtime behavior, which is still governed by targetSdk below.
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.foulkick.smartvideocompressor"
