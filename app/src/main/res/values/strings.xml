@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Smart Video Compressor</string>
+    <string name="notification_channel_name">Video compression</string>
+    <string name="notification_channel_description">Shows progress while compressing videos</string>
+</resources>

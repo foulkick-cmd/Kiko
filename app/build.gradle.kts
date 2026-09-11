@@ -1,0 +1,114 @@
+plugins {
+    id("com.android.application") version "8.6.1"
+    id("org.jetbrains.kotlin.android") version "2.0.21"
+    id("org.jetbrains.kotlin.plugin.compose") version "2.0.21"
+}
+
+android {
+    namespace = "com.foulkick.smartvideocompressor"
+    // media3 1.5.1's AAR metadata requires compileSdk >= 35 (confirmed by a real CI build
+    // failure). compileSdk is independent of targetSdk: compiling against newer APIs doesn't
+    // change the app's runtime behavior, which is still governed by targetSdk below.
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "com.foulkick.smartvideocompressor"
+        // Galaxy S23 Ultra (SM-S918B) ships Android 14 (API 34); minSdk 33 is intentional per spec
+        // and rules out older-Android compatibility branches this app does not need.
+        minSdk = 33
+        targetSdk = 34
+        versionCode = 1
+        versionName = "1.0"
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        vectorDrawables.useSupportLibrary = true
+
+        // Short git commit of the build, shown in the app's title bar so the installed build can
+        // be identified without ambiguity (every CI run publishes an artifact with the same name).
+        // GITHUB_SHA is set on GitHub Actions runners; local builds show "local".
+        val gitSha = System.getenv("GITHUB_SHA")?.take(7) ?: "local"
+        buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
+    }
+
+    // Release signing, sourced entirely from environment variables so no credentials are ever
+    // committed. In CI these are populated from GitHub Actions secrets (see android-build.yml);
+    // locally, if unset, the release build type simply has no signingConfig applied and Gradle
+    // produces the normal unsigned artifact -- this never breaks a plain local build.
+    val releaseKeystorePath = System.getenv("RELEASE_KEYSTORE_PATH")
+    signingConfigs {
+        if (releaseKeystorePath != null) {
+            create("release") {
+                storeFile = file(releaseKeystorePath)
+                storePassword = System.getenv("RELEASE_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("RELEASE_KEY_ALIAS")
+                keyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            // Left off for now: several Media3 APIs used in this project are unverified against
+            // real docs (see VideoCompressor.kt), so the priority is proving the Kotlin/Media3
+            // wiring compiles at all before adding R8 shrinking as a second variable. Re-enable
+            // once there's a known-green build.
+            isMinifyEnabled = false
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (releaseKeystorePath != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+        debug {
+            isMinifyEnabled = false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
+
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+}
+
+dependencies {
+    implementation(project(":core-logic"))
+
+    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
+    implementation("androidx.lifecycle:lifecycle-service:2.8.6")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6")
+    implementation("androidx.activity:activity-compose:1.9.2")
+
+    implementation(platform("androidx.compose:compose-bom:2024.10.00"))
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-graphics")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.compose.material3:material3")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+
+    // Local, on-device hardware video processing only -- no ffmpeg, no cloud, no network dependency.
+    val media3Version = "1.5.1"
+    implementation("androidx.media3:media3-transformer:$media3Version")
+    implementation("androidx.media3:media3-effect:$media3Version")
+    implementation("androidx.media3:media3-common:$media3Version")
+    implementation("androidx.media3:media3-exoplayer:$media3Version")
+
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+}
