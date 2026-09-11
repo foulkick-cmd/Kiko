@@ -97,8 +97,13 @@ class CompressionService : LifecycleService() {
         } else {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
         }
-        ServiceCompat.startForeground(
-            this,
+        // Call the platform API directly, NOT ServiceCompat.startForeground: androidx.core 1.13's
+        // shim masks the type against a pre-Android-15 allowlist, which strips mediaProcessing
+        // down to "none" -- and Android 15/16 then reject the start with
+        // InvalidForegroundServiceTypeException ("Starting FGS with type none ... prohibited").
+        // Confirmed from a real crash report on a realme RMX5090 / Android 16. The 3-arg
+        // startForeground exists since API 29, so it is always available at minSdk 33.
+        startForeground(
             NOTIFICATION_ID,
             buildNotification(currentFileName = null, currentPercent = 0, overallDone = 0, overallTotal = uris.size),
             foregroundServiceType,
