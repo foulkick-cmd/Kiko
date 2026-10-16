@@ -40,6 +40,29 @@
     { id: 'oct', label: 'ناحية أكتوبر وزايد', areas: G_OCT, free: [] },
     { id: 'other', label: 'باقي القاهرة والجيزة', areas: G_OTHER, free: [] }
   ];
+  // every area in the site's own area dropdown (as of Oct 2026), selectable one by one
+  var SITE_AREAS = ['التجمع الخامس', 'التجمع الأول', 'التجمع الثالث', 'القاهرة الجديدة', 'الرحاب', 'مدينتي',
+    'الشروق', 'العبور', 'بدر', 'المستقبل سيتي', 'العاصمة الإدارية الجديدة', 'هليوبوليس الجديدة', '6 أكتوبر',
+    'الشيخ زايد', 'زايد الجديدة', 'حدائق أكتوبر', 'أكتوبر الجديدة', 'الثورة الخضراء', 'دريم لاند', 'بيفرلي هيلز',
+    'المهندسين الجديدة', 'الحي المتميز', 'مدينة نصر', 'مصر الجديدة', 'المعادي', 'المقطم', 'زهراء المعادي',
+    'الزمالك', 'وسط البلد', 'جاردن سيتي', 'شبرا', 'عين شمس', 'المطرية', 'الزيتون', 'حدائق القبة', 'السلام',
+    'النزهة', 'شيراتون', 'حلوان', 'المعصرة', 'التبين', 'المهندسين', 'الدقي', 'العجوزة', 'الهرم', 'فيصل',
+    'الجيزة', 'إمبابة', 'الوراق', 'أوسيم', 'البدرشين', 'الحوامدية', 'صفط اللبن', 'كرداسة', 'الساحل الشمالي',
+    'العلمين الجديدة', 'مارينا', 'سيدي عبد الرحمن', 'رأس الحكمة', 'الضبعة', 'مرسى مطروح', 'سيدي كرير',
+    'الهانوفيل', 'الغردقة', 'الجونة', 'سهل حشيش', 'مكادي', 'سفاجا', 'مرسى علم', 'شرم الشيخ', 'دهب', 'نويبع',
+    'طابا', 'العين السخنة', 'رأس سدر', 'الإسكندرية', 'سموحة', 'سان ستيفانو', 'لوران', 'ميامي', 'سيدي بشر',
+    'المنتزه', 'العجمي', 'برج العرب', 'برج العرب الجديدة', 'الإبراهيمية', 'محرم بك', 'العصافرة', 'المندرة',
+    'أبو قير', 'بورسعيد', 'الإسماعيلية', 'السويس', 'دمياط', 'رأس البر', 'دمياط الجديدة', 'المنصورة',
+    'المنصورة الجديدة', 'طنطا', 'الزقازيق', 'بنها', 'شبين الكوم', 'دمنهور', 'كفر الشيخ', 'المحلة الكبرى',
+    'الفيوم', 'بني سويف', 'المنيا', 'أسيوط', 'سوهاج', 'قنا', 'الأقصر', 'أسوان', 'الغردقة الجديدة',
+    'طيبة الجديدة', 'أخميم الجديدة'];
+  function findGroup(id) {
+    if (id && id.indexOf('a:') === 0) {
+      var a = id.slice(2);
+      return { id: id, label: a, areas: [a], free: [] };
+    }
+    return GROUPS.filter(function (x) { return x.id === id; })[0] || GROUPS[1];
+  }
 
   // ---------------------------------------------------------------- state
   var S = {
@@ -261,6 +284,17 @@
     verifyMaxPrice(f);
   }
 
+  // free-text compound search: keeps units whose (normalized) name contains the text
+  async function runNameSearch(text, f) {
+    S.units = new Map(); S.coverage = []; fetchCount = 0;
+    var base = serverQS(f);
+    var r = await fetchAll('q=' + enc(text) + (base ? '&' + base : ''), 0);
+    var key = norm(text), kept = 0;
+    r.got.forEach(function (u, c) { if (u.nameKey.indexOf(key) >= 0) { S.units.set(c, u); kept++; } });
+    S.coverage.push({ area: 'بحث: ' + text, count: r.count, got: r.got.size, kept: kept });
+    verifyMaxPrice(f);
+  }
+
   async function runCompound(name, area, f) {
     S.units = new Map(); S.coverage = []; fetchCount = 0;
     var base = serverQS(f);
@@ -385,13 +419,18 @@
 
     var years = '<option value="">أي سنة</option>';
     for (var y = new Date().getFullYear(); y >= 2015; y--) years += '<option value="' + y + '">' + y + ' أو أقدم</option>';
-    var groups = GROUPS.map(function (g) { return '<option value="' + g.id + '">' + esc(g.label) + '</option>'; }).join('');
+    var groups = '<optgroup label="مجموعات">' +
+      GROUPS.map(function (g) { return '<option value="' + g.id + '">' + esc(g.label) + '</option>'; }).join('') +
+      '</optgroup><optgroup label="منطقة واحدة">' +
+      SITE_AREAS.map(function (a) { return '<option value="a:' + esc(a) + '">' + esc(a) + '</option>'; }).join('') +
+      '</optgroup>';
 
     var panel = el(
       '<div id="ax-panel">' +
       '<div id="ax-head"><b id="ax-title">أداة عقار إكزت</b><button id="ax-close">✕ قفل</button></div>' +
       '<div id="ax-form">' +
       '<label class="full" id="ax-group-wrap">المنطقة<select id="ax-group">' + groups + '</select></label>' +
+      '<label class="full" id="ax-name-wrap">بحث باسم الكمبوند (اختياري — بيتجاهل المنطقة)<div class="row"><input id="ax-name" placeholder="مثال: بادية أو Badya"><button type="button" id="ax-name-go" style="white-space:nowrap;padding:8px 12px;border:0;border-radius:8px;background:#0f766e;color:#fff;font:600 14px inherit">بحث</button></div></label>' +
       '<label>إجمالي العقد<div class="row"><input id="ax-tmin" inputmode="numeric" placeholder="من"><input id="ax-tmax" inputmode="numeric" placeholder="إلى"></div></label>' +
       '<label>سعر المتر<div class="row"><input id="ax-pmin" inputmode="numeric" placeholder="من"><input id="ax-pmax" inputmode="numeric" placeholder="إلى"></div></label>' +
       '<label>المساحة م²<div class="row"><input id="ax-amin" inputmode="numeric" placeholder="من"><input id="ax-amax" inputmode="numeric" placeholder="إلى"></div></label>' +
@@ -423,7 +462,15 @@
       if (S.compound && window.AXApp && window.AXApp.closeTab) { window.AXApp.closeTab(); return; }
       panel.classList.remove('open');
     };
-    document.getElementById('ax-run').onclick = run;
+    document.getElementById('ax-run').onclick = function () { S.nameQuery = null; run(); };
+    var goName = function () {
+      var v = document.getElementById('ax-name').value.trim();
+      if (!v) return;
+      S.nameQuery = v;
+      run();
+    };
+    document.getElementById('ax-name-go').onclick = goName;
+    document.getElementById('ax-name').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); goName(); } });
     document.getElementById('ax-stop').onclick = function () { S.cancel = true; };
     document.getElementById('ax-export').onclick = exportCSV;
     document.getElementById('ax-results').addEventListener('click', onResultsClick);
@@ -449,7 +496,10 @@
     });
     var html = '';
     if (S.running) html += 'جاري التحميل… طلبات: ' + fetchCount + ' · وحدات: ' + S.units.size + '<br>';
-    if (S.coverage.length && !S.compound) {
+    if (S.nameQuery && !S.compound && S.coverage.length) {
+      var cq = S.coverage[0];
+      html += 'نتيجة البحث "' + esc(S.nameQuery) + '": <b>' + (cq.kept || 0) + '</b> وحدة اسمها فيه الكلمة (من ' + cq.got + ' من ' + cq.count + ' نتيجة بحث الموقع)<br>';
+    } else if (S.coverage.length && !S.compound) {
       html += 'التغطية: <b>' + got.toLocaleString('en-US') + ' من ' + total.toLocaleString('en-US') + '</b> وحدة' +
         (partial.length ? ' — <span class="warn">ناقص: ' + esc(partial.join('، ')) + '</span>' : (S.running ? '' : ' ✓ كاملة')) + '<br>';
     }
@@ -537,10 +587,8 @@
     setStatus('');
     try {
       if (S.compound) await runCompound(S.compound.name, S.compound.area, f);
-      else {
-        var g = GROUPS.filter(function (x) { return x.id === f.group; })[0] || GROUPS[1];
-        await runGroup(g, f);
-      }
+      else if (S.nameQuery) await runNameSearch(S.nameQuery, f);
+      else await runGroup(findGroup(f.group), f);
       if (S.needRerun) {
         S.running = false;
         setStatus('<span class="warn">فلتر "حتى" لإجمالي العقد في الموقع طلع مش على إجمالي العقد — بعيد التحميل من غيره…</span>');
@@ -593,6 +641,7 @@
       S.compound = { name: h.get('name'), area: h.get('area') || '' };
       document.getElementById('ax-title').textContent = 'كمبوند: ' + S.compound.name;
       document.getElementById('ax-group-wrap').style.display = 'none';
+      document.getElementById('ax-name-wrap').style.display = 'none';
       document.getElementById('ax-sort').value = 'ppm';
       panel.classList.add('open');
       run();
