@@ -7,8 +7,6 @@
 // @match        https://www.aqarexit.com/*
 // @run-at       document-idle
 // @grant        none
-// @updateURL    https://raw.githubusercontent.com/foulkick-cmd/Kiko/Aqar/ax-tool.user.js
-// @downloadURL  https://raw.githubusercontent.com/foulkick-cmd/Kiko/Aqar/ax-tool.user.js
 // ==/UserScript==
 /* Aqar Exit Tool — injected into https://aqarexit.com
  * Loads every unit for a region group (beats the site's 192-per-search cap by
