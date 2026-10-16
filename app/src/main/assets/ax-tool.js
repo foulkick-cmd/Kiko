@@ -72,6 +72,8 @@
   // ---------------------------------------------------------------- state
   var S = {
     units: new Map(),      // code -> unit
+    seen: new Set(),       // every unit code read so far in this run (live progress)
+    expected: null,        // site's total for the selection (sum of area counts)
     coverage: [],          // [{area, count, got}]
     running: false,
     cancel: false,
@@ -124,16 +126,22 @@
       var art = arts[k];
       var t = texts(doc, art);
       if (!t.length) continue;
+      var id = art.getAttribute('data-analytics-unit');
       var codeI = -1;
       for (var i = 0; i < t.length; i++) if (/^U-\d+$/.test(t[i])) { codeI = i; break; }
-      if (codeI < 0) continue;
       var h2 = art.querySelector('h2');
       var name = h2 ? h2.textContent.trim() : '';
-      var loc = t[codeI - 1] || '';
+      // spec line: "شقة · 2 غرف · 2 حمام · 104 م²" (or any line with م² / غرف)
+      var specI = -1;
+      for (var q = 0; q < t.length; q++) if (/م²|غرف|حمام/.test(t[q])) { specI = q; break; }
+      // location line: "Developer · Area" (has " · ", comes before the spec, not a price/label)
+      var loc = '';
+      if (codeI > 0) loc = t[codeI - 1];
+      else for (var r = 0; r < (specI < 0 ? t.length : specI); r++) if (t[r].indexOf(' · ') >= 0 && !/ج\.م|غرف|م²/.test(t[r])) loc = t[r];
       var dev = '', area = loc;
       var p = loc.lastIndexOf(' · ');
       if (p >= 0) { dev = loc.slice(0, p).trim(); area = loc.slice(p + 3).trim(); }
-      var spec = t[codeI + 1] || '';
+      var spec = specI >= 0 ? t[specI] : '';
       var parts = spec.split(' · ');
       function part(word) { for (var j = 0; j < parts.length; j++) if (parts[j].indexOf(word) >= 0) return num(parts[j]); return null; }
       var cash = num(after(t, 'المطلوب كاش دلوقتي'));
@@ -141,15 +149,15 @@
       var m2 = part('م²');
       var total = (cash != null && remaining != null) ? cash + remaining : null;
       var a = art.querySelector('a[href*="/buy/opportunity/"]');
-      var id = art.getAttribute('data-analytics-unit');
+      if (codeI < 0 && cash == null && !name) continue; // not a unit card
       out.push({
         id: id,
-        code: t[codeI],
+        code: codeI >= 0 ? t[codeI] : 'id:' + id,
         name: name,
         nameKey: norm(name),
         dev: dev,
         area: area,
-        type: parts[0] || '',
+        type: (spec && parts[0] && !/غرف|حمام|م²/.test(parts[0])) ? parts[0] : '',
         beds: part('غرف'),
         m2: m2,
         cash: cash,
@@ -194,7 +202,9 @@
         .then(function (h) {
           var doc = new DOMParser().parseFromString(h, 'text/html');
           var m = doc.body.textContent.match(/(\d[\d,]*)\s*وحدة متاحة/);
-          return { count: m ? Number(m[1].replace(/,/g, '')) : null, units: parseUnits(doc) };
+          var units = parseUnits(doc);
+          units.forEach(function (u) { S.seen.add(u.code); });
+          return { count: m ? Number(m[1].replace(/,/g, '')) : null, units: units };
         });
     });
   }
@@ -244,17 +254,26 @@
     return { count: count, got: got };
   }
 
+  // stop trying once STALL_LIMIT requests in a row brought nothing new
+  var STALL_LIMIT = 30;
+  function addNew(got, units) {
+    var before = got.size;
+    units.forEach(function (u) { got.set(u.code, u); });
+    return got.size - before;
+  }
+
   async function sortUnion(qs, got, count) {
-    for (var i = 0; i < SORT_VARIANTS.length && got.size < count; i += CONCURRENCY) {
+    var stale = 0;
+    for (var i = 0; i < SORT_VARIANTS.length && got.size < count && stale < STALL_LIMIT; i += CONCURRENCY) {
       var batch = SORT_VARIANTS.slice(i, i + CONCURRENCY).map(function (v) { return getPage(qs + '&' + v, CAP); });
       var res = await Promise.all(batch);
-      res.forEach(function (r) { r.units.forEach(function (u) { got.set(u.code, u); }); });
+      res.forEach(function (r) { if (addNew(got, r.units) > 0) stale = 0; else stale++; });
     }
   }
 
   async function nameSearch(qs, got, count) {
-    var tried = new Set(), budget = QNAME_BUDGET;
-    while (got.size < count && budget > 0) {
+    var tried = new Set(), budget = QNAME_BUDGET, stale = 0;
+    while (got.size < count && budget > 0 && stale < STALL_LIMIT) {
       var names = [];
       got.forEach(function (u) {
         if (u.name && !tried.has(u.nameKey)) { tried.add(u.nameKey); names.push(u.name); }
@@ -264,15 +283,17 @@
       if (!names.length) break;
       names = names.slice(0, budget);
       budget -= names.length;
-      await Promise.all(names.map(async function (n) {
-        if (got.size >= count) return;
-        var r = await getPage(qs + '&q=' + enc(n), PAGE);
-        r.units.forEach(function (u) { got.set(u.code, u); });
-        if (r.count > PAGE && r.count <= CAP) {
-          var r2 = await getPage(qs + '&q=' + enc(n), showFor(r.count));
-          r2.units.forEach(function (u) { got.set(u.code, u); });
-        }
-      }));
+      for (var b = 0; b < names.length && got.size < count && stale < STALL_LIMIT; b += CONCURRENCY) {
+        await Promise.all(names.slice(b, b + CONCURRENCY).map(async function (n) {
+          var r = await getPage(qs + '&q=' + enc(n), PAGE);
+          var added = addNew(got, r.units);
+          if (r.count > PAGE && r.count <= CAP) {
+            var r2 = await getPage(qs + '&q=' + enc(n), showFor(r.count));
+            added += addNew(got, r2.units);
+          }
+          if (added > 0) stale = 0; else stale++;
+        }));
+      }
     }
   }
 
@@ -284,8 +305,14 @@
   }
 
   async function runGroup(group, f) {
-    S.units = new Map(); S.coverage = []; fetchCount = 0;
+    S.units = new Map(); S.coverage = []; S.seen = new Set(); S.expected = null; fetchCount = 0;
     var base = serverQS(f);
+    // quick count per area first, so progress shows the real target
+    var counts = await Promise.all(group.areas.map(function (area) {
+      return getPage('areas=' + enc(area) + (base ? '&' + base : ''), PAGE).then(function (r) { return r.count || 0; });
+    }));
+    S.expected = counts.reduce(function (a, b) { return a + b; }, 0);
+    setStatus();
     await Promise.all(group.areas.map(async function (area) {
       var qs = 'areas=' + enc(area) + (base ? '&' + base : '');
       var r = await fetchAll(qs, 0);
@@ -297,9 +324,14 @@
     for (var i = 0; i < group.free.length; i++) {
       var fa = group.free[i];
       var qs2 = 'q=' + enc(fa) + (base ? '&' + base : '');
-      var rf = await fetchAll(qs2, 2);
+      // only a few pages: the word also matches project names all over Egypt
+      var pages = await Promise.all(['sort=newest', 'sort=cash_asc', 'sort=spread_desc'].map(function (v) { return getPage(qs2 + '&' + v, CAP); }));
       var kept = 0;
-      rf.got.forEach(function (u, c) { if (norm(u.area).indexOf(norm(fa)) >= 0) { S.units.set(c, u); kept++; } });
+      pages.forEach(function (pg) {
+        pg.units.forEach(function (u) {
+          if (norm(u.area).indexOf(norm(fa)) >= 0 && !S.units.has(u.code)) { S.units.set(u.code, u); kept++; }
+        });
+      });
       S.coverage.push({ area: fa + ' (بحث بالاسم)', count: null, got: kept });
       render();
     }
@@ -308,7 +340,7 @@
 
   // free-text compound search: keeps units whose (normalized) name contains the text
   async function runNameSearch(text, f) {
-    S.units = new Map(); S.coverage = []; fetchCount = 0;
+    S.units = new Map(); S.coverage = []; S.seen = new Set(); S.expected = null; fetchCount = 0;
     var base = serverQS(f);
     var r = await fetchAll('q=' + enc(text) + (base ? '&' + base : ''), 0);
     var key = norm(text), kept = 0;
@@ -318,7 +350,7 @@
   }
 
   async function runCompound(name, area, f) {
-    S.units = new Map(); S.coverage = []; fetchCount = 0;
+    S.units = new Map(); S.coverage = []; S.seen = new Set(); S.expected = null; fetchCount = 0;
     var base = serverQS(f);
     var qs = 'q=' + enc(name) + (area ? '&areas=' + enc(area) : '') + (base ? '&' + base : '');
     var r = await fetchAll(qs, 0);
@@ -517,7 +549,8 @@
       if (c.count != null) { total += c.count; got += Math.min(c.got, c.count); if (c.got < c.count) partial.push(c.area + ' ' + c.got + '/' + c.count); }
     });
     var html = '';
-    if (S.running) html += 'جاري التحميل… طلبات: ' + fetchCount + ' · وحدات: ' + S.units.size + '<br>';
+    if (S.running) html += 'جاري التحميل… طلبات: ' + fetchCount + ' · وحدات اتقرت: ' + S.seen.size +
+      (S.expected ? ' من حوالي ' + S.expected.toLocaleString('en-US') : '') + ' · مناطق خلصت: ' + S.coverage.length + '<br>';
     if (S.nameQuery && !S.compound && S.coverage.length) {
       var cq = S.coverage[0];
       html += 'نتيجة البحث "' + esc(S.nameQuery) + '": <b>' + (cq.kept || 0) + '</b> وحدة اسمها فيه الكلمة (من ' + cq.got + ' من ' + cq.count + ' نتيجة بحث الموقع)<br>';
