@@ -658,6 +658,11 @@
   function boot() {
     if (!document.body || location.hostname.indexOf('aqarexit.com') < 0) return;
     var panel = buildUI();
+    if (window.AXApp) {
+      // Android app: the search screen is the home screen
+      document.getElementById('ax-title').textContent = 'Aqar Finder';
+      panel.classList.add('open');
+    }
     var h = new URLSearchParams(location.hash.replace(/^#/, ''));
     if (h.get('ax') === 'compound' && h.get('name')) {
       S.compound = { name: h.get('name'), area: h.get('area') || '' };
