@@ -13,7 +13,7 @@
   var PAGE = 48;          // site's page step
   var CONCURRENCY = 3;
   var DELAY_MS = 150;
-  var QNAME_BUDGET = 150; // max name-searches per oversized cell
+  var QNAME_BUDGET = 250; // max name/developer searches per oversized cell
 
   var TYPES = ['شقة', 'دوبلكس', 'تاون هاوس', 'توين هاوس', 'فيلا', 'شاليه', 'بنتهاوس', 'محل', 'مكتب'];
   var SORT_VARIANTS = [
@@ -21,8 +21,13 @@
     'beds=2&sort=newest', 'beds=2&sort=cash_asc', 'beds=3&sort=newest', 'beds=3&sort=cash_asc',
     'beds=4&sort=newest', 'maxCash=1000000&sort=newest', 'maxCash=2000000&sort=newest',
     'maxCash=3000000&sort=newest', 'maxCash=3000000&sort=spread_desc', 'maxCash=5000000&sort=newest',
-    'maxCash=5000000&sort=spread_desc'
+    'maxCash=5000000&sort=spread_desc', 'flexible=1&sort=newest', 'flexible=1&sort=cash_asc',
+    'deliveryBy=2026&sort=newest', 'deliveryBy=2027&sort=newest', 'deliveryBy=2028&sort=newest',
+    'contractBy=2022&sort=newest', 'contractBy=2023&sort=newest', 'contractBy=2024&sort=newest',
+    'maxInstallment=50000&sort=newest', 'maxInstallment=100000&sort=newest'
   ];
+  // unit types seen on cards but not in the site's type dropdown; used only if the server honours them
+  var EXTRA_TYPES = ['عيادة', 'صيدلية', 'أرض', 'استوديو', 'إداري', 'وحدة إدارية'];
 
   var G_NEWCAIRO = ['التجمع الخامس', 'التجمع الأول', 'التجمع الثالث', 'القاهرة الجديدة', 'الرحاب'];
   var G_EAST = ['العاصمة الإدارية الجديدة', 'الشروق', 'العبور', 'المستقبل سيتي', 'بدر', 'هليوبوليس الجديدة', 'مدينتي'];
@@ -211,13 +216,26 @@
     if (splitLevel === 0) {          // by type
       var parts = await Promise.all(TYPES.map(function (t) { return fetchAll(qs + '&types=' + enc(t), 1); }));
       parts.forEach(function (p) { p.got.forEach(function (u, c) { got.set(c, u); }); });
-      if (got.size < count) await sortUnion(qs, got, count);  // catches unlisted types
+      if (got.size < count) {
+        // other types: only trust the filter if it actually narrowed the result
+        var extra = await Promise.all(EXTRA_TYPES.map(function (t) { return getPage(qs + '&types=' + enc(t), PAGE).then(function (r) { return { t: t, r: r }; }); }));
+        for (var e = 0; e < extra.length; e++) {
+          var er = extra[e].r;
+          if (er.count != null && er.count > 0 && er.count < count) {
+            var full = await fetchAll(qs + '&types=' + enc(extra[e].t), 1);
+            full.got.forEach(function (u, c) { got.set(c, u); });
+          }
+        }
+      }
+      if (got.size < count) await sortUnion(qs, got, count);
+      if (got.size < count) await nameSearch(qs, got, count);
       return { count: count, got: got };
     }
     if (splitLevel === 1) {          // by readiness
       var rs = await Promise.all(['ready', 'offplan'].map(function (rd) { return fetchAll(qs + '&readiness=' + rd, 2); }));
       rs.forEach(function (p) { p.got.forEach(function (u, c) { got.set(c, u); }); });
       if (got.size < count) await sortUnion(qs, got, count);
+      if (got.size < count) await nameSearch(qs, got, count);
       return { count: count, got: got };
     }
     // level 2: cannot split further with exact filters
@@ -238,7 +256,11 @@
     var tried = new Set(), budget = QNAME_BUDGET;
     while (got.size < count && budget > 0) {
       var names = [];
-      got.forEach(function (u) { if (u.name && !tried.has(u.nameKey)) { tried.add(u.nameKey); names.push(u.name); } });
+      got.forEach(function (u) {
+        if (u.name && !tried.has(u.nameKey)) { tried.add(u.nameKey); names.push(u.name); }
+        var dk = 'dev:' + norm(u.dev);
+        if (u.dev && !tried.has(dk)) { tried.add(dk); names.push(u.dev); }
+      });
       if (!names.length) break;
       names = names.slice(0, budget);
       budget -= names.length;
