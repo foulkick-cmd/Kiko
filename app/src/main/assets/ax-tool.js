@@ -505,9 +505,9 @@
       '<label>سعر المتر<div class="row"><input id="ax-pmin" inputmode="numeric" placeholder="من"><input id="ax-pmax" inputmode="numeric" placeholder="إلى"></div></label>' +
       '<label>المساحة م²<div class="row"><input id="ax-amin" inputmode="numeric" placeholder="من"><input id="ax-amax" inputmode="numeric" placeholder="إلى"></div></label>' +
       '<label>سنة التعاقد<select id="ax-contract">' + years + '</select></label>' +
-      '<label>ترتيب (من الأقل)<select id="ax-sort"><option value="ppm">سعر المتر</option><option value="total">إجمالي العقد</option><option value="m2">المساحة</option></select></label>' +
+      '<label>ترتيب (من الأقل)<select id="ax-sort"><option value="ppm">سعر المتر</option><option value="total">إجمالي العقد</option><option value="m2">المساحة</option><option value="delivery">سنة الاستلام</option><option value="payEndYear">خلاص التقسيط</option></select></label>' +
       '<label>العرض<select id="ax-view"><option value="table">جدول</option><option value="cards">كروت</option></select></label>' +
-      '<div id="ax-actions"><button class="pri" id="ax-run">تحميل الوحدات</button><button id="ax-stop">إيقاف</button><button id="ax-export">تصدير Excel</button></div>' +
+      '<div id="ax-actions"><button class="pri" id="ax-run">تحميل الوحدات</button><button id="ax-stop">إيقاف</button><button id="ax-export">تصدير Excel</button><button id="ax-payend">📅 خلاص التقسيط</button></div>' +
       '</div>' +
       '<div id="ax-status">اختار المنطقة واضغط "تحميل الوحدات". الفلاتر والترتيب بيتطبقوا فوراً بعد التحميل.</div>' +
       '<div id="ax-results"></div>' +
@@ -543,6 +543,7 @@
     document.getElementById('ax-name').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); goName(); } });
     document.getElementById('ax-stop').onclick = function () { S.cancel = true; };
     document.getElementById('ax-export').onclick = exportCSV;
+    document.getElementById('ax-payend').onclick = fetchPayEnd;
     document.getElementById('ax-results').addEventListener('click', onResultsClick);
     return panel;
   }
@@ -587,6 +588,10 @@
 
   function render() {
     setStatus();
+    if (S.units.size && !S._payApplied) {
+      var pc = payCache(), nw = Date.now();
+      S.units.forEach(function (u) { var c = pc[u.id]; if (c && nw - c.t < PAYEND_TTL) applyPayEnd(u, c); });
+    }
     var f = readFilters();
     var list = filtered(f);
     var idx = compoundIndex();
@@ -601,7 +606,7 @@
     } else {
       box.innerHTML = head + '<table><thead><tr>' +
         '<th>#</th><th>الكمبوند</th><th>المنطقة</th><th>النوع</th><th>م²</th><th>سعر المتر</th><th>إجمالي العقد</th>' +
-        '<th>كاش</th><th>متبقي</th><th>استلام</th><th>أرخص 3 متر في الكمبوند</th><th></th></tr></thead><tbody>' +
+        '<th>كاش</th><th>متبقي</th><th>استلام</th><th>خلاص التقسيط</th><th>أرخص 3 متر في الكمبوند</th><th></th></tr></thead><tbody>' +
         shown.map(function (u, i) { return row(u, i, idx); }).join('') + '</tbody></table>' + more;
     }
   }
@@ -621,7 +626,7 @@
     return '<tr><td class="n">' + (i + 1) + '</td><td>' + esc(u.name) + '<br><small style="color:#64748b">' + esc(u.code) + (u.neg ? ' · <span class="ax-tag">تفاوض</span>' : '') + '</small></td>' +
       '<td>' + esc(u.area) + '</td><td>' + esc(u.type) + (u.beds ? ' · ' + u.beds + 'غ' : '') + '</td>' +
       '<td class="n">' + fmt(u.m2) + '</td><td class="n"><b>' + fmt(u.ppm) + '</b></td><td class="n">' + fmt(u.total) + '</td>' +
-      '<td class="n">' + fmt(u.cash) + '</td><td class="n">' + fmt(u.remaining) + '</td><td class="n">' + (u.delivery || '—') + '</td>' +
+      '<td class="n">' + fmt(u.cash) + '</td><td class="n">' + fmt(u.remaining) + '</td><td class="n">' + (u.delivery || '—') + '</td><td class="n">' + payEndText(u) + '</td>' +
       '<td>' + cmpHTML(idx, u) + '</td><td>' + btns(u) + '</td></tr>';
   }
   function card(u, idx) {
@@ -631,6 +636,7 @@
       '<div class="kv"><span>' + esc(u.type) + (u.beds ? ' · ' + u.beds + ' غرف' : '') + '</span><span>' + fmt(u.m2) + ' م²</span></div>' +
       '<div class="kv"><span>كاش / متبقي</span><span>' + fmt(u.cash) + ' / ' + fmt(u.remaining) + '</span></div>' +
       '<div class="kv"><span>الاستلام</span><span>' + (u.delivery || '—') + '</span></div>' +
+      '<div class="kv"><span>خلاص التقسيط</span><span>' + payEndText(u) + '</span></div>' +
       '<div style="margin:6px 0;font-size:12px">أرخص 3 متر في الكمبوند: ' + cmpHTML(idx, u) + '</div>' +
       '<div>' + btns(u) + '</div></div>';
   }
@@ -680,18 +686,86 @@
     }
   }
 
+  // ---------------------------------------------------------------- last installment (from each unit's page)
+  // Cards don't carry it; the unit page shows "باقي على خلاص التقسيط: N سنة". Fetched on demand for the
+  // filtered list only, and cached on the phone.
+  var PAYEND_MAX = 300;
+  var PAYEND_TTL = 7 * 24 * 3600 * 1000;
+  function payCache() { try { return JSON.parse(localStorage.getItem('ax_payend') || '{}'); } catch (e) { return {}; } }
+  function savePayCache(c) { try { localStorage.setItem('ax_payend', JSON.stringify(c)); } catch (e) { /* full */ } }
+  function applyPayEnd(u, rec) { u.payEndRaw = rec.raw; u.payEndYear = rec.year; }
+  function payEndText(u) {
+    if (u.payEndYear) return u.payEndYear + (u.payEndRaw ? ' <small style="color:#64748b">(' + esc(u.payEndRaw) + ')</small>' : '');
+    if (u.payEndRaw) return esc(u.payEndRaw);
+    return '—';
+  }
+  function parsePayEnd(doc) {
+    var t = texts(doc, doc.body);
+    for (var i = 0; i < t.length; i++) {
+      if (t[i].indexOf('خلاص التقسيط') >= 0) {
+        // the value may sit in the same text node after ":" or in the next node(s)
+        var cand = (t[i].split(/[:：]/)[1] || '').trim() || t[i + 1] || '';
+        if (/^[:：]$/.test(cand)) cand = t[i + 2] || '';
+        var y = cand.match(/(\d+(?:\.\d+)?)\s*سن/), mo = cand.match(/(\d+)\s*(?:شهر|شهور|أشهر)/);
+        var years = (y ? Number(y[1]) : 0) + (mo ? Number(mo[1]) / 12 : 0);
+        var now = new Date();
+        var year = (y || mo) ? Math.floor(now.getFullYear() + (now.getMonth() + Math.round(years * 12)) / 12) : null;
+        if (!years && /خلص|منته|مسدد/.test(cand)) year = now.getFullYear();
+        return { raw: cand.replace(/\s+/g, ' ').trim(), year: year };
+      }
+    }
+    return { raw: 'غير مذكور', year: null };
+  }
+  async function fetchPayEnd() {
+    if (S.running) return;
+    var list = filtered(readFilters());
+    if (!list.length) { setStatus('<span class="warn">حمّل الوحدات الأول.</span>'); return; }
+    var cache = payCache(), now = Date.now();
+    list.forEach(function (u) { var c = cache[u.id]; if (c && now - c.t < PAYEND_TTL) applyPayEnd(u, c); });
+    var todo = list.filter(function (u) { return !u.payEndRaw; }).slice(0, PAYEND_MAX);
+    if (!todo.length) { render(); setStatus('خلاص التقسيط موجود لكل الوحدات المعروضة.'); return; }
+    S.running = true; S.cancel = false; fetchCount = 0;
+    var done = 0;
+    try {
+      await Promise.all(todo.map(function (u) {
+        return limited(function () {
+          if (S.cancel) return Promise.reject(new Error('cancelled'));
+          fetchCount++;
+          return fetch(u.url, { credentials: 'include' }).then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.text();
+          }).then(function (h) {
+            var rec = parsePayEnd(new DOMParser().parseFromString(h, 'text/html'));
+            applyPayEnd(u, rec);
+            rec.t = Date.now(); cache[u.id] = rec;
+            done++;
+            setStatus('جاري جلب خلاص التقسيط: ' + done + ' من ' + todo.length);
+          }).catch(function (e) { if (S.cancel) throw e; done++; });
+        });
+      }));
+      var left = list.filter(function (u) { return !u.payEndRaw; }).length;
+      setStatus('اتجاب خلاص التقسيط لـ ' + done + ' وحدة' + (left ? ' — فاضل ' + left + '، اضغط تاني للباقي' : '') + '.');
+    } catch (e) {
+      setStatus('<span class="warn">اتوقف بعد ' + done + ' وحدة.</span>');
+    } finally {
+      S.running = false; queue.length = 0;
+      savePayCache(cache);
+      render();
+    }
+  }
+
   // ---------------------------------------------------------------- export (CSV, opens in Excel)
   function exportCSV() {
     var list = filtered(readFilters());
     if (!list.length) { setStatus('<span class="warn">مفيش وحدات للتصدير.</span>'); return; }
     var idx = compoundIndex();
     var cols = ['الكود', 'الكمبوند', 'المطور', 'المنطقة', 'النوع', 'الغرف', 'المساحة م2', 'سعر المتر', 'إجمالي العقد',
-      'عمولة 1.25%', 'كاش', 'متبقي', 'الاستلام', 'قابل للتفاوض', 'أرخص 1', 'أرخص 2', 'أرخص 3', 'الرابط'];
+      'عمولة 1.25%', 'كاش', 'متبقي', 'الاستلام', 'خلاص التقسيط (سنة)', 'باقي على خلاص التقسيط', 'قابل للتفاوض', 'أرخص 1', 'أرخص 2', 'أرخص 3', 'الرابط'];
     var lines = [cols.join(',')];
     list.forEach(function (u) {
       var o = cheapestOthers(idx, u);
       var v = [u.code, u.name, u.dev, u.area, u.type, u.beds, u.m2, u.ppm && Math.round(u.ppm), u.total,
-        u.total && Math.round(u.total * 0.0125), u.cash, u.remaining, u.delivery, u.neg ? 'نعم' : '',
+        u.total && Math.round(u.total * 0.0125), u.cash, u.remaining, u.delivery, u.payEndYear, u.payEndRaw, u.neg ? 'نعم' : '',
         o[0] && Math.round(o[0].ppm), o[1] && Math.round(o[1].ppm), o[2] && Math.round(o[2].ppm), u.url];
       lines.push(v.map(function (x) {
         x = x == null ? '' : String(x);
