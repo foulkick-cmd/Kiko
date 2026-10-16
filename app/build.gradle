@@ -10,11 +10,24 @@ android {
         applicationId 'com.kareem.aqarexittool'
         minSdk 29
         targetSdk 34
-        versionCode 7
-        versionName '1.6'
+        versionCode 8
+        versionName '1.6.1'
+    }
+
+    // fixed key so every new build installs as an update over the previous one
+    signingConfigs {
+        fixed {
+            storeFile file('aqarfinder.jks')
+            storePassword 'aqarfinder123'
+            keyAlias 'aqarfinder'
+            keyPassword 'aqarfinder123'
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig signingConfigs.fixed
+        }
         release {
             minifyEnabled false
         }
