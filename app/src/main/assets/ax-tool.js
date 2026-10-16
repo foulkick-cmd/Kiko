@@ -73,6 +73,7 @@
   var S = {
     units: new Map(),      // code -> unit
     seen: new Set(),       // every unit code read so far in this run (live progress)
+    seenUnits: new Map(),  // same, with data — kept if the run is stopped midway
     expected: null,        // site's total for the selection (sum of area counts)
     coverage: [],          // [{area, count, got}]
     running: false,
@@ -194,16 +195,24 @@
       if (S.cancel) return Promise.reject(new Error('cancelled'));
       fetchCount++;
       setStatus();
-      return fetch('/opportunities?show=' + show + (qs ? '&' + qs : ''), { credentials: 'include' })
-        .then(function (r) {
-          if (!r.ok) throw new Error('HTTP ' + r.status);
-          return r.text();
-        })
+      var url = '/opportunities?show=' + show + (qs ? '&' + qs : '');
+      function once() {
+        var ctl = new AbortController();
+        var timer = setTimeout(function () { ctl.abort(); }, 30000);
+        return fetch(url, { credentials: 'include', signal: ctl.signal })
+          .then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.text();
+          })
+          .finally(function () { clearTimeout(timer); });
+      }
+      return once()
+        .catch(function () { return sleep(1500).then(once); })   // one retry
         .then(function (h) {
           var doc = new DOMParser().parseFromString(h, 'text/html');
           var m = doc.body.textContent.match(/(\d[\d,]*)\s*وحدة متاحة/);
           var units = parseUnits(doc);
-          units.forEach(function (u) { S.seen.add(u.code); });
+          units.forEach(function (u) { S.seen.add(u.code); S.seenUnits.set(u.code, u); });
           return { count: m ? Number(m[1].replace(/,/g, '')) : null, units: units };
         });
     });
@@ -305,19 +314,26 @@
   }
 
   async function runGroup(group, f) {
-    S.units = new Map(); S.coverage = []; S.seen = new Set(); S.expected = null; fetchCount = 0;
+    S.units = new Map(); S.coverage = []; S.seen = new Set(); S.seenUnits = new Map(); S.expected = null; fetchCount = 0;
+    S.groupAreas = new Set(group.areas.map(norm));
     var base = serverQS(f);
     // quick count per area first, so progress shows the real target
     var counts = await Promise.all(group.areas.map(function (area) {
-      return getPage('areas=' + enc(area) + (base ? '&' + base : ''), PAGE).then(function (r) { return r.count || 0; });
+      return getPage('areas=' + enc(area) + (base ? '&' + base : ''), PAGE)
+        .then(function (r) { return r.count || 0; }, function (e) { if (S.cancel) throw e; return 0; });
     }));
     S.expected = counts.reduce(function (a, b) { return a + b; }, 0);
     setStatus();
     await Promise.all(group.areas.map(async function (area) {
       var qs = 'areas=' + enc(area) + (base ? '&' + base : '');
-      var r = await fetchAll(qs, 0);
-      r.got.forEach(function (u, c) { S.units.set(c, u); });
-      S.coverage.push({ area: area, count: r.count, got: r.got.size });
+      try {
+        var r = await fetchAll(qs, 0);
+        r.got.forEach(function (u, c) { S.units.set(c, u); });
+        S.coverage.push({ area: area, count: r.count, got: r.got.size });
+      } catch (e) {
+        if (S.cancel) throw e;
+        S.coverage.push({ area: area + ' (فشل التحميل)', count: null, got: 0, failed: true });
+      }
       render();
     }));
     // free-text areas (not in the site's area filter): search by name, keep matching area
@@ -545,7 +561,9 @@
     var box = document.getElementById('ax-status');
     if (!box) return;
     var total = 0, got = 0, partial = [];
+    var failed = [];
     S.coverage.forEach(function (c) {
+      if (c.failed) failed.push(c.area);
       if (c.count != null) { total += c.count; got += Math.min(c.got, c.count); if (c.got < c.count) partial.push(c.area + ' ' + c.got + '/' + c.count); }
     });
     var html = '';
@@ -562,6 +580,7 @@
       var c = S.coverage[0];
       html += 'وحدات الكمبوند بنفس كتابة الاسم: <b>' + (c.kept || 0) + '</b> (من ' + c.got + ' نتيجة بحث)<br>';
     }
+    if (failed.length) html += '<span class="warn">' + esc(failed.join('، ')) + ' — دوس "تحميل الوحدات" تاني</span><br>';
     html += statusExtra;
     box.innerHTML = html;
   }
@@ -651,9 +670,12 @@
       }
       setStatus('آخر تحميل: ' + new Date().toLocaleTimeString('ar-EG'));
     } catch (e) {
-      setStatus('<span class="warn">' + (e.message === 'cancelled' ? 'اتوقف. المعروض جزئي.' : 'حصلت مشكلة: ' + esc(e.message)) + '</span>');
+      setStatus('<span class="warn">' + (S.cancel || e.message === 'cancelled' ? 'اتوقف. المعروض هو اللي اتحمّل لحد الإيقاف.' : 'حصلت مشكلة: ' + esc(e.message)) + '</span>');
     } finally {
       S.running = false; queue.length = 0;
+      if (S.groupAreas && !S.compound && !S.nameQuery) {
+        S.seenUnits.forEach(function (u, c) { if (!S.units.has(c) && S.groupAreas.has(norm(u.area))) S.units.set(c, u); });
+      }
       render();
     }
   }
