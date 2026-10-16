@@ -358,10 +358,22 @@
   async function runNameSearch(text, f) {
     S.units = new Map(); S.coverage = []; S.seen = new Set(); S.expected = null; fetchCount = 0;
     var base = serverQS(f);
-    var r = await fetchAll('q=' + enc(text) + (base ? '&' + base : ''), 0);
-    var key = norm(text), kept = 0;
-    r.got.forEach(function (u, c) { if (u.nameKey.indexOf(key) >= 0) { S.units.set(c, u); kept++; } });
-    S.coverage.push({ area: 'بحث: ' + text, count: r.count, got: r.got.size, kept: kept });
+    // several spellings of the same compound, separated by comma: "Aliva، اليفا، اليڤا"
+    var terms = text.split(/[,،|+]/).map(function (x) { return x.trim(); }).filter(Boolean);
+    var seenKeys = new Set();
+    terms = terms.filter(function (t) { var k = norm(t); if (!k || seenKeys.has(k)) return false; seenKeys.add(k); return true; });
+    var keys = terms.map(norm);
+    var per = [];
+    for (var i = 0; i < terms.length; i++) {
+      var r = await fetchAll('q=' + enc(terms[i]) + (base ? '&' + base : ''), 0);
+      var kept = 0;
+      r.got.forEach(function (u, c) {
+        if (keys.some(function (k) { return u.nameKey.indexOf(k) >= 0; })) { if (!S.units.has(c)) kept++; S.units.set(c, u); }
+      });
+      per.push(terms[i] + ': ' + kept);
+      render();
+    }
+    S.coverage.push({ area: 'بحث: ' + terms.join('، '), count: null, got: S.units.size, kept: S.units.size, per: per });
     verifyMaxPrice(f);
   }
 
@@ -500,7 +512,7 @@
       '<div id="ax-head"><b id="ax-title">أداة عقار إكزت</b><button id="ax-close">✕ قفل</button></div>' +
       '<div id="ax-form">' +
       '<label class="full" id="ax-group-wrap">المنطقة<select id="ax-group">' + groups + '</select></label>' +
-      '<label class="full" id="ax-name-wrap">بحث باسم الكمبوند (اختياري — بيتجاهل المنطقة)<div class="row"><input id="ax-name" placeholder="مثال: بادية أو Badya"><button type="button" id="ax-name-go" style="white-space:nowrap;padding:8px 12px;border:0;border-radius:8px;background:#0f766e;color:#fff;font:600 14px inherit">بحث</button></div></label>' +
+      '<label class="full" id="ax-name-wrap">بحث باسم الكمبوند — كذا كتابة افصل بينهم بفاصلة (بيتجاهل المنطقة)<div class="row"><input id="ax-name" placeholder="مثال: Aliva، اليفا، اليڤا"><button type="button" id="ax-name-go" style="white-space:nowrap;padding:8px 12px;border:0;border-radius:8px;background:#0f766e;color:#fff;font:600 14px inherit">بحث</button></div></label>' +
       '<label>إجمالي العقد<div class="row"><input id="ax-tmin" inputmode="numeric" placeholder="من"><input id="ax-tmax" inputmode="numeric" placeholder="إلى"></div></label>' +
       '<label>سعر المتر<div class="row"><input id="ax-pmin" inputmode="numeric" placeholder="من"><input id="ax-pmax" inputmode="numeric" placeholder="إلى"></div></label>' +
       '<label>المساحة م²<div class="row"><input id="ax-amin" inputmode="numeric" placeholder="من"><input id="ax-amax" inputmode="numeric" placeholder="إلى"></div></label>' +
@@ -572,7 +584,7 @@
       (S.expected ? ' من حوالي ' + S.expected.toLocaleString('en-US') : '') + ' · مناطق خلصت: ' + S.coverage.length + '<br>';
     if (S.nameQuery && !S.compound && S.coverage.length) {
       var cq = S.coverage[0];
-      html += 'نتيجة البحث "' + esc(S.nameQuery) + '": <b>' + (cq.kept || 0) + '</b> وحدة اسمها فيه الكلمة (من ' + cq.got + ' من ' + cq.count + ' نتيجة بحث الموقع)<br>';
+      html += 'نتيجة البحث: <b>' + (cq.kept || 0) + '</b> وحدة' + (cq.per && cq.per.length > 1 ? ' (' + esc(cq.per.join(' · ')) + ')' : '') + '<br>';
     } else if (S.coverage.length && !S.compound) {
       html += 'التغطية: <b>' + got.toLocaleString('en-US') + ' من ' + total.toLocaleString('en-US') + '</b> وحدة' +
         (partial.length ? ' — <span class="warn">ناقص: ' + esc(partial.join('، ')) + '</span>' : (S.running ? '' : ' ✓ كاملة')) + '<br>';
