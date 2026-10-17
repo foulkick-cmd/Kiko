@@ -612,8 +612,8 @@
       box.innerHTML = head + '<div class="ax-cards">' + shown.map(function (u) { return card(u, idx); }).join('') + '</div>' + more;
     } else {
       box.innerHTML = head + '<table><thead><tr>' +
-        '<th>#</th><th>الكمبوند</th><th>المنطقة</th><th>النوع</th><th>م²</th><th>سعر المتر</th><th>إجمالي العقد</th>' +
-        '<th>كاش</th><th>متبقي</th><th>استلام</th><th>التشطيب</th><th>آخر قسط</th><th>أرخص 3 متر في الكمبوند</th><th></th></tr></thead><tbody>' +
+        '<th>#</th><th>الكمبوند</th><th>المنطقة</th><th>النوع</th><th>م²</th><th>التشطيب</th><th>سعر المتر</th><th>إجمالي العقد</th>' +
+        '<th>كاش</th><th>متبقي</th><th>استلام</th><th>آخر قسط</th><th>أرخص 3 متر في الكمبوند</th><th></th></tr></thead><tbody>' +
         shown.map(function (u, i) { return row(u, i, idx); }).join('') + '</tbody></table>' + more;
     }
     observeRows();
@@ -633,20 +633,21 @@
   function row(u, i, idx) {
     return '<tr data-row="' + esc(u.code) + '"><td class="n">' + (i + 1) + '</td><td>' + esc(u.name) + '<br><small style="color:#64748b">' + esc(u.code) + (u.neg ? ' · <span class="ax-tag">تفاوض</span>' : '') + '</small></td>' +
       '<td>' + esc(u.area) + '</td><td>' + esc(u.type) + (u.beds ? ' · ' + u.beds + 'غ' : '') + '</td>' +
-      '<td class="n">' + fmt(u.m2) + '</td><td class="n"><b>' + fmt(u.ppm) + '</b></td><td class="n">' + fmt(u.total) + '</td>' +
-      '<td class="n">' + fmt(u.cash) + '</td><td class="n">' + fmt(u.remaining) + '</td><td class="n">' + (u.delivery || '—') + '</td>' +
+      '<td class="n">' + fmt(u.m2) + '</td>' +
       '<td data-det="' + esc(u.code) + '" data-k="fin">' + detText(u.fin) + '</td>' +
+      '<td class="n"><b>' + fmt(u.ppm) + '</b></td><td class="n">' + fmt(u.total) + '</td>' +
+      '<td class="n">' + fmt(u.cash) + '</td><td class="n">' + fmt(u.remaining) + '</td><td class="n">' + (u.delivery || '—') + '</td>' +
       '<td data-det="' + esc(u.code) + '" data-k="pay">' + detText(u.payEnd) + '</td>' +
       '<td>' + cmpHTML(idx, u) + '</td><td>' + btns(u) + '</td></tr>';
   }
   function card(u, idx) {
     return '<div class="ax-card" data-row="' + esc(u.code) + '"><h4>' + esc(u.name) + '</h4><div class="sub">' + esc(u.dev) + ' · ' + esc(u.area) + ' · ' + esc(u.code) + (u.neg ? ' · <span class="ax-tag">تفاوض</span>' : '') + '</div>' +
+      '<div class="kv"><span>التشطيب</span><span data-det="' + esc(u.code) + '" data-k="fin">' + detText(u.fin) + '</span></div>' +
       '<div class="kv"><span>سعر المتر</span><span class="big">' + fmt(u.ppm) + '</span></div>' +
       '<div class="kv"><span>إجمالي العقد</span><span>' + fmt(u.total) + '</span></div>' +
       '<div class="kv"><span>' + esc(u.type) + (u.beds ? ' · ' + u.beds + ' غرف' : '') + '</span><span>' + fmt(u.m2) + ' م²</span></div>' +
       '<div class="kv"><span>كاش / متبقي</span><span>' + fmt(u.cash) + ' / ' + fmt(u.remaining) + '</span></div>' +
       '<div class="kv"><span>الاستلام</span><span>' + (u.delivery || '—') + '</span></div>' +
-      '<div class="kv"><span>التشطيب</span><span data-det="' + esc(u.code) + '" data-k="fin">' + detText(u.fin) + '</span></div>' +
       '<div class="kv"><span>آخر قسط</span><span data-det="' + esc(u.code) + '" data-k="pay">' + detText(u.payEnd) + '</span></div>' +
       '<div style="margin:6px 0;font-size:12px">أرخص 3 متر في الكمبوند: ' + cmpHTML(idx, u) + '</div>' +
       '<div>' + btns(u) + '</div></div>';
@@ -785,13 +786,13 @@
     var list = filtered(readFilters());
     if (!list.length) { setStatus('<span class="warn">مفيش وحدات للتصدير.</span>'); return; }
     var idx = compoundIndex();
-    var cols = ['الكود', 'الكمبوند', 'المطور', 'المنطقة', 'النوع', 'الغرف', 'المساحة م2', 'سعر المتر', 'إجمالي العقد',
-      'عمولة 1.25%', 'كاش', 'متبقي', 'الاستلام', 'التشطيب', 'آخر قسط', 'قابل للتفاوض', 'أرخص 1', 'أرخص 2', 'أرخص 3', 'الرابط'];
+    var cols = ['الكود', 'الكمبوند', 'المطور', 'المنطقة', 'النوع', 'الغرف', 'المساحة م2', 'التشطيب', 'سعر المتر', 'إجمالي العقد',
+      'عمولة 1.25%', 'كاش', 'متبقي', 'الاستلام', 'آخر قسط', 'قابل للتفاوض', 'أرخص 1', 'أرخص 2', 'أرخص 3', 'الرابط'];
     var lines = [cols.join(',')];
     list.forEach(function (u) {
       var o = cheapestOthers(idx, u);
-      var v = [u.code, u.name, u.dev, u.area, u.type, u.beds, u.m2, u.ppm && Math.round(u.ppm), u.total,
-        u.total && Math.round(u.total * 0.0125), u.cash, u.remaining, u.delivery, u.fin, u.payEnd, u.neg ? 'نعم' : '',
+      var v = [u.code, u.name, u.dev, u.area, u.type, u.beds, u.m2, u.fin, u.ppm && Math.round(u.ppm), u.total,
+        u.total && Math.round(u.total * 0.0125), u.cash, u.remaining, u.delivery, u.payEnd, u.neg ? 'نعم' : '',
         o[0] && Math.round(o[0].ppm), o[1] && Math.round(o[1].ppm), o[2] && Math.round(o[2].ppm), u.url];
       lines.push(v.map(function (x) {
         x = x == null ? '' : String(x);
