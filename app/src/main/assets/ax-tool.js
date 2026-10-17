@@ -167,6 +167,16 @@
         ppm: (total && m2) ? total / m2 : null,
         neg: t.some(function (x) { return x.indexOf('قابل للتفاوض') >= 0; }),
         delivery: t.indexOf('الاستلام') >= 0 ? num(after(t, 'الاستلام')) : null,
+        inst: t.indexOf('القسط') >= 0 ? num(after(t, 'القسط')) : null,
+        freq: (function () {
+          var i = t.indexOf('القسط');
+          if (i < 0) return '';
+          for (var j = i + 1; j < Math.min(t.length, i + 4); j++) {
+            var m = t[j].match(/(شهري|ربع سنوي|نصف سنوي|سنوي)/);
+            if (m) return m[1];
+          }
+          return '';
+        })(),
         url: 'https://aqarexit.com' + (a ? a.getAttribute('href').split('?')[0] : '/buy/opportunity/' + id)
       });
     }
@@ -703,7 +713,7 @@
   // ("التشطيب: نص تشطيب", "باقي على خلاص التقسيط: 5 سنة"). They load by themselves for the rows
   // you scroll to, and are kept on the phone for a week.
   var DET_TTL = 7 * 24 * 3600 * 1000;
-  var DET_LABELS = { fin: 'التشطيب', pay: 'باقي على خلاص التقسيط', floor: 'الدور' };
+  var DET_LABELS = { fin: 'التشطيب', pay: 'باقي على خلاص التقسيط', floor: 'الدور', cy: 'سنة التعاقد' };
   var detCache = (function () { try { return JSON.parse(localStorage.getItem('ax_details') || '{}'); } catch (e) { return {}; } })();
   var detSaveTimer = null;
   function saveDet() {
@@ -712,7 +722,7 @@
   }
   function applyDet(u) {
     var c = detCache[u.id];
-    if (c && Date.now() - c.t < DET_TTL) { u.fin = c.fin; u.payEnd = c.pay; u.floor = c.floor; return true; }
+    if (c && c.v === 2 && Date.now() - c.t < DET_TTL) { u.fin = c.fin; u.payEnd = c.pay; u.floor = c.floor; u.cy = c.cy; return true; }
     return false;
   }
   function labelValue(t, label) {
@@ -729,31 +739,35 @@
   }
   var detQueue = [], detActive = 0, detPending = new Set();
   function wantDetails(u) {
-    if (u.fin !== undefined || applyDet(u) || detPending.has(u.id)) return;
+    if (hasDetails(u) || detPending.has(u.id)) return;
     detPending.add(u.id); detQueue.push(u); pumpDetails();
+  }
+  // fetch one unit page and fill finishing / installment end / floor / contract year
+  function fetchDetail(u) {
+    return fetch(u.url, { credentials: 'include' }).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.text();
+    }).then(function (h) {
+      var doc = new DOMParser().parseFromString(h, 'text/html');
+      var t = texts(doc, doc.body);
+      u.fin = labelValue(t, DET_LABELS.fin) || 'غير مذكور';
+      u.payEnd = labelValue(t, DET_LABELS.pay) || 'غير مذكور';
+      u.floor = labelValue(t, DET_LABELS.floor) || '';
+      u.cy = labelValue(t, DET_LABELS.cy) || '';
+      detCache[u.id] = { v: 2, fin: u.fin, pay: u.payEnd, floor: u.floor, cy: u.cy, t: Date.now() };
+      saveDet();
+      paintDetails(u);
+    });
   }
   function pumpDetails() {
     while (detActive < 2 && detQueue.length) {
       var u = detQueue.shift();
       detActive++;
-      fetch(u.url, { credentials: 'include' }).then(function (r) {
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        return r.text();
-      }).then((function (u) {
-        return function (h) {
-          var doc = new DOMParser().parseFromString(h, 'text/html');
-          var t = texts(doc, doc.body);
-          u.fin = labelValue(t, DET_LABELS.fin) || 'غير مذكور';
-          u.payEnd = labelValue(t, DET_LABELS.pay) || 'غير مذكور';
-          u.floor = labelValue(t, DET_LABELS.floor) || '';
-          detCache[u.id] = { fin: u.fin, pay: u.payEnd, floor: u.floor, t: Date.now() };
-          saveDet();
-          paintDetails(u);
-        };
-      })(u)).catch(function () { /* leave as loading; will retry on next scroll */ })
+      fetchDetail(u).catch(function () { /* retried on next scroll */ })
         .finally((function (u) { return function () { detActive--; detPending.delete(u.id); setTimeout(pumpDetails, 120); }; })(u));
     }
   }
+  function hasDetails(u) { return (u.fin !== undefined && u.cy !== undefined) || applyDet(u); }
   function detText(v) { return v === undefined ? '<span style="color:#94a3b8">…</span>' : esc(v); }
   function paintDetails(u) {
     var els = document.querySelectorAll('[data-det="' + u.code + '"]');
@@ -776,23 +790,52 @@
     for (var i = 0; i < rows.length; i++) {
       var u = S.units.get(rows[i].getAttribute('data-row'));
       if (!u) continue;
-      if (u.fin !== undefined || applyDet(u)) { paintDetails(u); continue; }
+      if (hasDetails(u)) { paintDetails(u); continue; }
       if (detObserver) detObserver.observe(rows[i]); else if (i < 60) wantDetails(u);
     }
   }
 
   // ---------------------------------------------------------------- export (CSV, opens in Excel)
-  function exportCSV() {
+  var EXPORT_CONFIRM = 500;
+  async function exportCSV() {
+    if (S.running) return;
     var list = filtered(readFilters());
     if (!list.length) { setStatus('<span class="warn">مفيش وحدات للتصدير.</span>'); return; }
+    var missing = list.filter(function (u) { return !hasDetails(u); });
+    if (missing.length) {
+      if (missing.length > EXPORT_CONFIRM &&
+        !window.confirm('التصدير محتاج يجيب التشطيب وآخر قسط لـ ' + missing.length +
+          ' وحدة (طلب لكل وحدة). ده هياخد وقت وإنترنت. تكمل؟\n\nلو لأ: فلتر الأول علشان العدد يقل.')) {
+        setStatus('<span class="warn">التصدير اتلغى. فلتر علشان العدد يقل، أو صدّر وانت موافق على الوقت.</span>');
+        return;
+      }
+      S.running = true; S.cancel = false;
+      var done = 0, failed = 0;
+      setStatus('بجهز التصدير: بجيب التفاصيل 0 من ' + missing.length + ' — "إيقاف" يصدّر اللي اتجاب');
+      try {
+        await Promise.all(missing.map(function (u) {
+          return limited(function () {
+            if (S.cancel) return Promise.resolve();
+            return fetchDetail(u).catch(function () { failed++; }).then(function () {
+              done++;
+              if (done % 5 === 0 || done === missing.length)
+                setStatus('بجهز التصدير: بجيب التفاصيل ' + done + ' من ' + missing.length + ' — "إيقاف" يصدّر اللي اتجاب');
+            });
+          });
+        }));
+      } finally {
+        S.running = false; queue.length = 0;
+      }
+      setStatus('اتجابت التفاصيل لـ ' + (done - failed) + ' من ' + missing.length + (failed ? ' (' + failed + ' فشلت)' : '') + (S.cancel ? ' — اتوقف، والتصدير فيه اللي اتجاب' : ''));
+    }
     var idx = compoundIndex();
     var cols = ['الكود', 'الكمبوند', 'المطور', 'المنطقة', 'النوع', 'الغرف', 'المساحة م2', 'التشطيب', 'سعر المتر', 'إجمالي العقد',
-      'عمولة 1.25%', 'كاش', 'متبقي', 'الاستلام', 'آخر قسط', 'قابل للتفاوض', 'أرخص 1', 'أرخص 2', 'أرخص 3', 'الرابط'];
+      'عمولة 1.25%', 'كاش', 'متبقي', 'القسط', 'الدورية', 'الاستلام', 'آخر قسط', 'سنة التعاقد', 'الدور', 'قابل للتفاوض', 'أرخص 1', 'أرخص 2', 'أرخص 3', 'الرابط'];
     var lines = [cols.join(',')];
     list.forEach(function (u) {
       var o = cheapestOthers(idx, u);
       var v = [u.code, u.name, u.dev, u.area, u.type, u.beds, u.m2, u.fin, u.ppm && Math.round(u.ppm), u.total,
-        u.total && Math.round(u.total * 0.0125), u.cash, u.remaining, u.delivery, u.payEnd, u.neg ? 'نعم' : '',
+        u.total && Math.round(u.total * 0.0125), u.cash, u.remaining, u.inst, u.freq, u.delivery, u.payEnd, u.cy, u.floor, u.neg ? 'نعم' : '',
         o[0] && Math.round(o[0].ppm), o[1] && Math.round(o[1].ppm), o[2] && Math.round(o[2].ppm), u.url];
       lines.push(v.map(function (x) {
         x = x == null ? '' : String(x);
