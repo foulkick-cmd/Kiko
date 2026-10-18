@@ -647,9 +647,10 @@
     if (!S.units.size) { box.innerHTML = ''; return; }
     var finNote = '';
     if (f.fin) {
-      var lacking = 0;
-      S.units.forEach(function (u) { if (!hasDetails(u)) lacking++; });
-      if (lacking) finNote = ' <span style="color:#b45309">— فلتر التشطيب شغال على الوحدات اللي اتجابت تفاصيلها بس (' + lacking.toLocaleString('en-US') + ' لسه)</span>';
+      // only units that pass the OTHER filters matter here
+      var lacking = filtered(Object.assign({}, f, { fin: '' })).filter(function (u) { return !hasDetails(u); }).length;
+      if (lacking) finNote = ' <span style="color:#b45309">— ' + lacking.toLocaleString('en-US') +
+        ' وحدة مطابقة لباقي الفلاتر لسه تشطيبها ماتجابش' + (S.running ? '؛ هيتجاب أوتوماتيك بعد ما التحميل يخلص' : '؛ غيّر اختيار التشطيب علشان يتجاب') + '</span>';
     }
     var head = '<div style="padding:6px 12px;font-size:12px;color:#475569">بعد الفلاتر: <b>' + list.length.toLocaleString('en-US') + '</b> وحدة' + finNote + '</div>';
     var MAX = 600; // keep the DOM light on phones; export has everything
