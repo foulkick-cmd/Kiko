@@ -868,14 +868,32 @@
 
   // ---------------------------------------------------------------- export (CSV, opens in Excel)
   var DETAILS_CONFIRM = 500;
+  // in-page yes/no box (the Android WebView silently answers "no" to window.confirm)
+  function axConfirm(html) {
+    return new Promise(function (resolve) {
+      var ov = document.createElement('div');
+      ov.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:16px;direction:rtl;font:14px system-ui,sans-serif';
+      ov.innerHTML = '<div style="background:#fff;color:#0f172a;border-radius:14px;max-width:420px;width:100%;padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.3)">' +
+        '<div style="line-height:1.7;margin-bottom:14px">' + html + '</div>' +
+        '<div style="display:flex;gap:8px"><button data-a="1" style="flex:1;padding:10px;border:0;border-radius:9px;background:#0f766e;color:#fff;font:600 14px inherit">أيوه، كمّل</button>' +
+        '<button data-a="0" style="flex:1;padding:10px;border:0;border-radius:9px;background:#e2e8f0;color:#0f172a;font:600 14px inherit">لأ</button></div></div>';
+      ov.addEventListener('click', function (e) {
+        var b = e.target.closest('[data-a]');
+        if (!b) return;
+        ov.remove();
+        resolve(b.getAttribute('data-a') === '1');
+      });
+      document.body.appendChild(ov);
+    });
+  }
   // fetch unit-page details for every unit in `list` that lacks them; returns false if the user declined
   async function ensureDetails(list, why) {
     var missing = list.filter(function (u) { return !hasDetails(u); });
     if (!missing.length) return true;
     if (missing.length > DETAILS_CONFIRM &&
-      !window.confirm(why + ' محتاج يجيب التشطيب وآخر قسط لـ ' + missing.length +
-        ' وحدة (طلب لكل وحدة). ده هياخد وقت وإنترنت. تكمل؟\n\nلو لأ: ضيّق الفلاتر الأول علشان العدد يقل.')) {
-      setStatus('<span class="warn">اتلغى. ضيّق الفلاتر (منطقة، سعر متر، مساحة) علشان العدد يقل.</span>');
+      !(await axConfirm(why + ' محتاج يجيب التشطيب وآخر قسط لـ ' + missing.length.toLocaleString('en-US') +
+        ' وحدة (طلب لكل وحدة).<br>ده هياخد وقت وإنترنت (تقريباً ' + Math.ceil(missing.length / 150) + ' دقيقة).<br><br>لو لأ: ضيّق الفلاتر الأول علشان العدد يقل.'))) {
+      setStatus('<span class="warn">' + why + ' اتلغى بناءً على اختيارك. ضيّق الفلاتر (منطقة، سعر متر، مساحة) علشان العدد يقل، أو اختار تاني ووافق.</span>');
       return false;
     }
     S.running = true; S.cancel = false;

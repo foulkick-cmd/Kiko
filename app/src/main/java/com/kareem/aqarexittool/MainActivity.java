@@ -11,6 +11,7 @@ import android.os.Bundle;
 import android.provider.MediaStore;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -51,6 +52,7 @@ public class MainActivity extends Activity {
         cm.setAcceptThirdPartyCookies(web, true);
 
         web.addJavascriptInterface(new Bridge(), "AXApp");
+        web.setWebChromeClient(new WebChromeClient()); // enables the site's alert/confirm dialogs
         web.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
