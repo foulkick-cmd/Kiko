@@ -433,13 +433,27 @@
       ppmMin: n('ax-pmin'), ppmMax: n('ax-pmax'),
       m2Min: n('ax-amin'), m2Max: n('ax-amax'),
       contractBy: g('ax-contract') || '',
+      fin: g('ax-fin') || '',
       sort: g('ax-sort') || 'ppm'
     };
   }
 
+  // groups the site's free text into categories; anything unrecognised is "other"
+  function finCat(u) {
+    if (u.fin === undefined) return 'unknown';
+    var t = norm(u.fin);
+    if (!t || t === norm('غير مذكور')) return 'none';
+    if (/طوب|احمر|خرسان|عضم|core|shell|بدون تشطيب|غير مشطب/.test(t)) return 'brick';
+    if (/نص|نصف|semi/.test(t)) return 'semi';
+    if (/كامل|تشطيب|لوكس|الترا|سوبر|fully|finish|مفروش|furnish/.test(t)) return 'full';
+    return 'other';
+  }
+  var FIN_LABELS = { brick: 'طوب أحمر', semi: 'نص تشطيب', full: 'تشطيب كامل', other: 'تاني', none: 'غير مذكور' };
+
   function filtered(f) {
     var arr = [];
     S.units.forEach(function (u) {
+      if (f.fin && finCat(u) !== f.fin) return;
       if (f.totalMin && !(u.total >= f.totalMin)) return;
       if (f.totalMax && !(u.total <= f.totalMax)) return;
       if (f.ppmMin && !(u.ppm >= f.ppmMin)) return;
@@ -540,6 +554,9 @@
       '<label>سعر المتر<div class="row"><input id="ax-pmin" inputmode="numeric" placeholder="من"><input id="ax-pmax" inputmode="numeric" placeholder="إلى"></div></label>' +
       '<label>المساحة م²<div class="row"><input id="ax-amin" inputmode="numeric" placeholder="من"><input id="ax-amax" inputmode="numeric" placeholder="إلى"></div></label>' +
       '<label>سنة التعاقد<select id="ax-contract">' + years + '</select></label>' +
+      '<label>التشطيب<select id="ax-fin"><option value="">أي تشطيب</option>' +
+      ['brick', 'semi', 'full', 'other', 'none'].map(function (k) { return '<option value="' + k + '">' + FIN_LABELS[k] + '</option>'; }).join('') +
+      '</select></label>' +
       '<label>ترتيب (من الأقل)<select id="ax-sort"><option value="ppm">سعر المتر</option><option value="total">إجمالي العقد</option><option value="m2">المساحة</option><option value="delivery">سنة الاستلام</option></select></label>' +
       '<label>العرض<select id="ax-view"><option value="table">جدول</option><option value="cards">كروت</option></select></label>' +
       '<div id="ax-actions"><button class="pri" id="ax-run">تحميل الوحدات</button><button id="ax-stop">إيقاف</button><button id="ax-export">تصدير Excel</button></div>' +
@@ -550,13 +567,14 @@
     document.body.appendChild(panel);
 
     var s = loadSettings();
-    ['ax-group', 'ax-tmin', 'ax-tmax', 'ax-pmin', 'ax-pmax', 'ax-amin', 'ax-amax', 'ax-contract', 'ax-sort', 'ax-view'].forEach(function (id) {
+    ['ax-group', 'ax-tmin', 'ax-tmax', 'ax-pmin', 'ax-pmax', 'ax-amin', 'ax-amax', 'ax-contract', 'ax-fin', 'ax-sort', 'ax-view'].forEach(function (id) {
       var e = document.getElementById(id);
       if (s[id] != null) e.value = s[id];
       var live = ['ax-tmin', 'ax-pmin', 'ax-pmax', 'ax-amin', 'ax-amax', 'ax-sort', 'ax-view'].indexOf(id) >= 0;
       e.addEventListener(e.tagName === 'SELECT' ? 'change' : 'input', function () {
         persist();
         if (id === 'ax-view') S.view = e.value;
+        if (id === 'ax-fin') { finFilterChanged(); return; }
         if (live) render();
         if (id === 'ax-tmax') render();   // client side always; server side applies on next load
       });
@@ -584,7 +602,7 @@
 
   function persist() {
     var o = {};
-    ['ax-group', 'ax-tmin', 'ax-tmax', 'ax-pmin', 'ax-pmax', 'ax-amin', 'ax-amax', 'ax-contract', 'ax-sort', 'ax-view'].forEach(function (id) {
+    ['ax-group', 'ax-tmin', 'ax-tmax', 'ax-pmin', 'ax-pmax', 'ax-amin', 'ax-amax', 'ax-contract', 'ax-fin', 'ax-sort', 'ax-view'].forEach(function (id) {
       o[id] = document.getElementById(id).value;
     });
     saveSettings(o);
@@ -627,7 +645,13 @@
     var idx = compoundIndex();
     var box = document.getElementById('ax-results');
     if (!S.units.size) { box.innerHTML = ''; return; }
-    var head = '<div style="padding:6px 12px;font-size:12px;color:#475569">بعد الفلاتر: <b>' + list.length.toLocaleString('en-US') + '</b> وحدة</div>';
+    var finNote = '';
+    if (f.fin) {
+      var lacking = 0;
+      S.units.forEach(function (u) { if (!hasDetails(u)) lacking++; });
+      if (lacking) finNote = ' <span style="color:#b45309">— فلتر التشطيب شغال على الوحدات اللي اتجابت تفاصيلها بس (' + lacking.toLocaleString('en-US') + ' لسه)</span>';
+    }
+    var head = '<div style="padding:6px 12px;font-size:12px;color:#475569">بعد الفلاتر: <b>' + list.length.toLocaleString('en-US') + '</b> وحدة' + finNote + '</div>';
     var MAX = 600; // keep the DOM light on phones; export has everything
     var shown = list.slice(0, MAX);
     var more = list.length > MAX ? '<div style="padding:10px 12px;color:#64748b">معروض أول ' + MAX + ' — التصدير فيه الكل.</div>' : '';
@@ -719,6 +743,7 @@
       }
       render();
     }
+    if (readFilters().fin && !S.cancel) finFilterChanged();
   }
 
   // ---------------------------------------------------------------- unit-page details (shown as written)
@@ -809,38 +834,56 @@
   }
 
   // ---------------------------------------------------------------- export (CSV, opens in Excel)
-  var EXPORT_CONFIRM = 500;
+  var DETAILS_CONFIRM = 500;
+  // fetch unit-page details for every unit in `list` that lacks them; returns false if the user declined
+  async function ensureDetails(list, why) {
+    var missing = list.filter(function (u) { return !hasDetails(u); });
+    if (!missing.length) return true;
+    if (missing.length > DETAILS_CONFIRM &&
+      !window.confirm(why + ' محتاج يجيب التشطيب وآخر قسط لـ ' + missing.length +
+        ' وحدة (طلب لكل وحدة). ده هياخد وقت وإنترنت. تكمل؟\n\nلو لأ: ضيّق الفلاتر الأول علشان العدد يقل.')) {
+      setStatus('<span class="warn">اتلغى. ضيّق الفلاتر (منطقة، سعر متر، مساحة) علشان العدد يقل.</span>');
+      return false;
+    }
+    S.running = true; S.cancel = false;
+    var done = 0, failed = 0;
+    var msg = function () { return why + ': بجيب التفاصيل ' + done + ' من ' + missing.length + ' — "إيقاف" يكمّل باللي اتجاب'; };
+    setStatus(msg());
+    try {
+      await Promise.all(missing.map(function (u) {
+        return limited(function () {
+          if (S.cancel) return Promise.resolve();
+          return fetchDetail(u).catch(function () { failed++; }).then(function () {
+            done++;
+            if (done % 5 === 0 || done === missing.length) { setStatus(msg()); liveRender(); }
+          });
+        });
+      }));
+    } finally {
+      S.running = false; queue.length = 0;
+    }
+    setStatus('اتجابت التفاصيل لـ ' + (done - failed) + ' من ' + missing.length + (failed ? ' (' + failed + ' فشلت)' : '') + (S.cancel ? ' — اتوقف، والنتيجة فيها اللي اتجاب بس' : ''));
+    return true;
+  }
+
+  // finishing lives only on unit pages: complete details for the units matching the OTHER filters, then filter
+  async function finFilterChanged() {
+    var f = readFilters();
+    if (!f.fin) { render(); return; }
+    if (S.running) { render(); return; }
+    var g = Object.assign({}, f, { fin: '' });
+    var cand = filtered(g);
+    var ok = await ensureDetails(cand, 'فلتر التشطيب');
+    if (!ok) { document.getElementById('ax-fin').value = ''; persist(); }
+    render();
+  }
+
   async function exportCSV() {
     if (S.running) return;
     var list = filtered(readFilters());
     if (!list.length) { setStatus('<span class="warn">مفيش وحدات للتصدير.</span>'); return; }
-    var missing = list.filter(function (u) { return !hasDetails(u); });
-    if (missing.length) {
-      if (missing.length > EXPORT_CONFIRM &&
-        !window.confirm('التصدير محتاج يجيب التشطيب وآخر قسط لـ ' + missing.length +
-          ' وحدة (طلب لكل وحدة). ده هياخد وقت وإنترنت. تكمل؟\n\nلو لأ: فلتر الأول علشان العدد يقل.')) {
-        setStatus('<span class="warn">التصدير اتلغى. فلتر علشان العدد يقل، أو صدّر وانت موافق على الوقت.</span>');
-        return;
-      }
-      S.running = true; S.cancel = false;
-      var done = 0, failed = 0;
-      setStatus('بجهز التصدير: بجيب التفاصيل 0 من ' + missing.length + ' — "إيقاف" يصدّر اللي اتجاب');
-      try {
-        await Promise.all(missing.map(function (u) {
-          return limited(function () {
-            if (S.cancel) return Promise.resolve();
-            return fetchDetail(u).catch(function () { failed++; }).then(function () {
-              done++;
-              if (done % 5 === 0 || done === missing.length)
-                setStatus('بجهز التصدير: بجيب التفاصيل ' + done + ' من ' + missing.length + ' — "إيقاف" يصدّر اللي اتجاب');
-            });
-          });
-        }));
-      } finally {
-        S.running = false; queue.length = 0;
-      }
-      setStatus('اتجابت التفاصيل لـ ' + (done - failed) + ' من ' + missing.length + (failed ? ' (' + failed + ' فشلت)' : '') + (S.cancel ? ' — اتوقف، والتصدير فيه اللي اتجاب' : ''));
-    }
+    if (!(await ensureDetails(list, 'التصدير'))) return;
+    list = filtered(readFilters());
     var idx = compoundIndex();
     var cols = ['الكود', 'الكمبوند', 'المطور', 'المنطقة', 'النوع', 'الغرف', 'المساحة م2', 'التشطيب', 'سعر المتر', 'إجمالي العقد',
       'عمولة 1.25%', 'كاش', 'متبقي', 'القسط', 'الدورية', 'الاستلام', 'آخر قسط', 'سنة التعاقد', 'الدور', 'قابل للتفاوض', 'أرخص 1', 'أرخص 2', 'أرخص 3', 'الرابط'];
