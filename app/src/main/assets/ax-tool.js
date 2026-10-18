@@ -497,18 +497,23 @@
     '#ax-fab{position:fixed;bottom:18px;left:18px;z-index:2147483646;background:#0f766e;color:#fff;border:0;border-radius:28px;padding:12px 18px;font:600 15px system-ui,sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.3)}',
     '#ax-panel{position:fixed;inset:0;z-index:2147483647;background:#f8fafc;color:#0f172a;direction:rtl;font:14px system-ui,"Segoe UI",Tahoma,sans-serif;display:none;flex-direction:column}',
     '#ax-panel.open{display:flex}',
-    '#ax-head{padding:10px 12px;background:#0f766e;color:#fff;display:flex;align-items:center;gap:8px}',
+    '#ax-head{padding:8px 12px;background:#0f766e;color:#fff;display:flex;align-items:center;gap:8px}',
     '#ax-head b{flex:1;font-size:16px}',
     '#ax-head button{background:rgba(255,255,255,.18);color:#fff;border:0;border-radius:8px;padding:6px 10px;font:inherit}',
-    '#ax-form{padding:10px 12px;display:grid;grid-template-columns:1fr 1fr;gap:8px;background:#fff;border-bottom:1px solid #e2e8f0}',
-    '#ax-form label{display:flex;flex-direction:column;font-size:12px;color:#475569;gap:3px}',
+    '#ax-form{padding:8px 10px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 8px;grid-auto-flow:row dense;background:#fff;border-bottom:1px solid #e2e8f0;max-height:62vh;overflow:auto}',
+    '#ax-form.collapsed{display:none}',
+    '#ax-form label{display:flex;flex-direction:column;font-size:11px;color:#475569;gap:2px;min-width:0}',
     '#ax-form .full{grid-column:1/-1}',
-    '#ax-form input,#ax-form select{font:inherit;padding:8px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#0f172a;width:100%;box-sizing:border-box}',
-    '#ax-form .row{display:flex;gap:6px}',
-    '#ax-actions{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap}',
-    '#ax-actions button{flex:1;min-width:90px;padding:10px;border:0;border-radius:8px;font:600 14px inherit;background:#e2e8f0;color:#0f172a}',
+    '#ax-form .two{grid-column:span 2}',
+    '#ax-form input,#ax-form select{font:13px system-ui,sans-serif;padding:6px 7px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;color:#0f172a;width:100%;box-sizing:border-box;min-width:0}',
+    '#ax-form .row{display:flex;gap:4px}',
+    '#ax-actions{grid-column:1/-1;display:flex;gap:6px;flex-wrap:wrap}',
+    '#ax-actions button{flex:1;min-width:80px;padding:8px;border:0;border-radius:8px;font:600 13px inherit;background:#e2e8f0;color:#0f172a}',
+    '#ax-sum{display:flex;align-items:center;gap:8px;padding:7px 10px;background:#ecfdf5;border-bottom:1px solid #a7f3d0;font-size:12px;color:#065f46}',
+    '#ax-sum span{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '#ax-sum button{border:1px solid #0f766e;background:#fff;color:#0f766e;border-radius:7px;padding:5px 9px;font:600 12px inherit;white-space:nowrap}',
     '#ax-actions button.pri{background:#0f766e;color:#fff}',
-    '#ax-status{padding:8px 12px;font-size:12px;color:#334155;background:#f1f5f9;border-bottom:1px solid #e2e8f0}',
+    '#ax-status{padding:6px 10px;font-size:11.5px;line-height:1.5;color:#334155;background:#f1f5f9;border-bottom:1px solid #e2e8f0}',
     '#ax-status .warn{color:#b45309;font-weight:600}',
     '#ax-results{flex:1;overflow:auto;-webkit-overflow-scrolling:touch}',
     '#ax-results table{border-collapse:collapse;width:max-content;min-width:100%;font-size:13px}',
@@ -549,10 +554,10 @@
       '<div id="ax-head"><b id="ax-title">أداة عقار إكزت</b><button id="ax-close">✕ قفل</button></div>' +
       '<div id="ax-form">' +
       '<label class="full" id="ax-group-wrap">المنطقة<select id="ax-group">' + groups + '</select></label>' +
-      '<label class="full" id="ax-name-wrap">بحث باسم الكمبوند — كذا كتابة افصل بينهم بفاصلة (بيتجاهل المنطقة)<div class="row"><input id="ax-name" placeholder="مثال: Aliva، اليفا، اليڤا"><button type="button" id="ax-name-go" style="white-space:nowrap;padding:8px 12px;border:0;border-radius:8px;background:#0f766e;color:#fff;font:600 14px inherit">بحث</button></div></label>' +
-      '<label>إجمالي العقد<div class="row"><input id="ax-tmin" inputmode="numeric" placeholder="من"><input id="ax-tmax" inputmode="numeric" placeholder="إلى"></div></label>' +
-      '<label>سعر المتر<div class="row"><input id="ax-pmin" inputmode="numeric" placeholder="من"><input id="ax-pmax" inputmode="numeric" placeholder="إلى"></div></label>' +
-      '<label>المساحة م²<div class="row"><input id="ax-amin" inputmode="numeric" placeholder="من"><input id="ax-amax" inputmode="numeric" placeholder="إلى"></div></label>' +
+      '<label class="full" id="ax-name-wrap">أو اسم الكمبوند (كذا كتابة بفاصلة — بيتجاهل المنطقة)<div class="row"><input id="ax-name" placeholder="Aliva، اليفا، اليڤا"><button type="button" id="ax-name-go" style="white-space:nowrap;padding:6px 12px;border:0;border-radius:8px;background:#0f766e;color:#fff;font:600 13px inherit">بحث</button></div></label>' +
+      '<label class="two">إجمالي العقد<div class="row"><input id="ax-tmin" inputmode="numeric" placeholder="من"><input id="ax-tmax" inputmode="numeric" placeholder="إلى"></div></label>' +
+      '<label class="two">سعر المتر<div class="row"><input id="ax-pmin" inputmode="numeric" placeholder="من"><input id="ax-pmax" inputmode="numeric" placeholder="إلى"></div></label>' +
+      '<label class="two">المساحة م²<div class="row"><input id="ax-amin" inputmode="numeric" placeholder="من"><input id="ax-amax" inputmode="numeric" placeholder="إلى"></div></label>' +
       '<label>سنة التعاقد<select id="ax-contract">' + years + '</select></label>' +
       '<label>التشطيب<select id="ax-fin"><option value="">أي تشطيب</option>' +
       ['brick', 'semi', 'full', 'other', 'none'].map(function (k) { return '<option value="' + k + '">' + FIN_LABELS[k] + '</option>'; }).join('') +
@@ -561,6 +566,7 @@
       '<label>العرض<select id="ax-view"><option value="table">جدول</option><option value="cards">كروت</option></select></label>' +
       '<div id="ax-actions"><button class="pri" id="ax-run">تحميل الوحدات</button><button id="ax-stop">إيقاف</button><button id="ax-export">تصدير Excel</button></div>' +
       '</div>' +
+      '<div id="ax-sum" style="display:none"><span id="ax-sum-text"></span><button id="ax-toggle">⚙️ الفلاتر</button></div>' +
       '<div id="ax-status">اختار المنطقة واضغط "تحميل الوحدات". الفلاتر والترتيب بيتطبقوا فوراً بعد التحميل.</div>' +
       '<div id="ax-results"></div>' +
       '</div>');
@@ -573,6 +579,7 @@
       var live = ['ax-tmin', 'ax-pmin', 'ax-pmax', 'ax-amin', 'ax-amax', 'ax-sort', 'ax-view'].indexOf(id) >= 0;
       e.addEventListener(e.tagName === 'SELECT' ? 'change' : 'input', function () {
         persist();
+        var st = document.getElementById('ax-sum-text'); if (st) st.textContent = filterSummary();
         if (id === 'ax-view') S.view = e.value;
         if (id === 'ax-fin') { finFilterChanged(); return; }
         if (live) render();
@@ -585,11 +592,15 @@
       if (S.compound && window.AXApp && window.AXApp.closeTab) { window.AXApp.closeTab(); return; }
       panel.classList.remove('open');
     };
-    document.getElementById('ax-run').onclick = function () { S.nameQuery = null; run(); };
+    document.getElementById('ax-run').onclick = function () { S.nameQuery = null; setFiltersOpen(false); run(); };
+    document.getElementById('ax-toggle').onclick = function () {
+      setFiltersOpen(document.getElementById('ax-form').classList.contains('collapsed'));
+    };
     var goName = function () {
       var v = document.getElementById('ax-name').value.trim();
       if (!v) return;
       S.nameQuery = v;
+      setFiltersOpen(false);
       run();
     };
     document.getElementById('ax-name-go').onclick = goName;
@@ -598,6 +609,27 @@
     document.getElementById('ax-export').onclick = exportCSV;
     document.getElementById('ax-results').addEventListener('click', onResultsClick);
     return panel;
+  }
+
+  // filters fold into a one-line summary once results are shown, so the list gets the screen
+  function filterSummary() {
+    var f = readFilters(), p = [];
+    if (S.nameQuery) p.push('اسم: ' + S.nameQuery);
+    else { var sel = document.getElementById('ax-group'); if (sel && sel.selectedIndex >= 0) p.push(sel.options[sel.selectedIndex].text); }
+    var rng = function (lbl, a, b) { if (a || b) p.push(lbl + ' ' + (a ? fmt(a) : '') + '–' + (b ? fmt(b) : '')); };
+    rng('عقد', f.totalMin, f.totalMax); rng('متر', f.ppmMin, f.ppmMax); rng('م²', f.m2Min, f.m2Max);
+    if (f.contractBy) p.push('تعاقد ≤' + f.contractBy);
+    if (f.fin) p.push(FIN_LABELS[f.fin]);
+    var so = document.getElementById('ax-sort'); p.push('ترتيب: ' + so.options[so.selectedIndex].text);
+    return p.join(' · ');
+  }
+  function setFiltersOpen(open) {
+    var form = document.getElementById('ax-form'), bar = document.getElementById('ax-sum');
+    if (!form || !bar) return;
+    form.classList.toggle('collapsed', !open);
+    bar.style.display = (open && !S.units.size) ? 'none' : 'flex';
+    document.getElementById('ax-toggle').textContent = open ? '▲ اقفل الفلاتر' : '⚙️ الفلاتر';
+    document.getElementById('ax-sum-text').textContent = filterSummary();
   }
 
   function persist() {
