@@ -200,6 +200,12 @@
   function next() { while (active < CONCURRENCY && queue.length) queue.shift()(); }
 
   var fetchCount = 0;
+  // redraw the results at most every 1.5 s while loading, so units show up as soon as they are read
+  var liveTimer = null;
+  function liveRender() {
+    if (liveTimer) return;
+    liveTimer = setTimeout(function () { liveTimer = null; render(); }, 1500);
+  }
   function getPage(qs, show) {
     return limited(function () {
       if (S.cancel) return Promise.reject(new Error('cancelled'));
@@ -222,7 +228,10 @@
           var doc = new DOMParser().parseFromString(h, 'text/html');
           var m = doc.body.textContent.match(/(\d[\d,]*)\s*وحدة متاحة/);
           var units = parseUnits(doc);
-          units.forEach(function (u) { S.seen.add(u.code); S.seenUnits.set(u.code, u); });
+          units.forEach(function (u) {
+            S.seen.add(u.code); S.seenUnits.set(u.code, u);
+            if (S.liveFilter && !S.units.has(u.code) && S.liveFilter(u)) { S.units.set(u.code, u); liveRender(); }
+          });
           return { count: m ? Number(m[1].replace(/,/g, '')) : null, units: units };
         });
     });
@@ -326,6 +335,7 @@
   async function runGroup(group, f) {
     S.units = new Map(); S.coverage = []; S.seen = new Set(); S.seenUnits = new Map(); S.expected = null; fetchCount = 0;
     S.groupAreas = new Set(group.areas.map(norm));
+    S.liveFilter = function (u) { return S.groupAreas.has(norm(u.area)); };
     var base = serverQS(f);
     // quick count per area first, so progress shows the real target
     var counts = await Promise.all(group.areas.map(function (area) {
@@ -373,12 +383,13 @@
     var seenKeys = new Set();
     terms = terms.filter(function (t) { var k = norm(t); if (!k || seenKeys.has(k)) return false; seenKeys.add(k); return true; });
     var keys = terms.map(norm);
+    S.liveFilter = function (u) { return keys.some(function (k) { return u.nameKey.indexOf(k) >= 0; }); };
     var per = [];
     for (var i = 0; i < terms.length; i++) {
       var r = await fetchAll('q=' + enc(terms[i]) + (base ? '&' + base : ''), 0);
       var kept = 0;
       r.got.forEach(function (u, c) {
-        if (keys.some(function (k) { return u.nameKey.indexOf(k) >= 0; })) { if (!S.units.has(c)) kept++; S.units.set(c, u); }
+        if (keys.some(function (k) { return u.nameKey.indexOf(k) >= 0; })) { kept++; S.units.set(c, u); }
       });
       per.push(terms[i] + ': ' + kept);
       render();
@@ -389,6 +400,8 @@
 
   async function runCompound(name, area, f) {
     S.units = new Map(); S.coverage = []; S.seen = new Set(); S.expected = null; fetchCount = 0;
+    var ckey = norm(name);
+    S.liveFilter = function (u) { return u.nameKey === ckey; };
     var base = serverQS(f);
     var qs = 'q=' + enc(name) + (area ? '&areas=' + enc(area) : '') + (base ? '&' + base : '');
     var r = await fetchAll(qs, 0);
@@ -700,7 +713,7 @@
     } catch (e) {
       setStatus('<span class="warn">' + (S.cancel || e.message === 'cancelled' ? 'اتوقف. المعروض هو اللي اتحمّل لحد الإيقاف.' : 'حصلت مشكلة: ' + esc(e.message)) + '</span>');
     } finally {
-      S.running = false; queue.length = 0;
+      S.running = false; queue.length = 0; S.liveFilter = null;
       if (S.groupAreas && !S.compound && !S.nameQuery) {
         S.seenUnits.forEach(function (u, c) { if (!S.units.has(c) && S.groupAreas.has(norm(u.area))) S.units.set(c, u); });
       }
