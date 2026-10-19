@@ -6,6 +6,7 @@
 (function () {
   'use strict';
   if (window.__AX_LOADED__) return;
+  var AX_VERSION = '1.12.2';
   window.__AX_LOADED__ = true;
 
   // ---------------------------------------------------------------- config
@@ -926,6 +927,7 @@
     var cand = filtered(g);
     var ok = await ensureDetails(cand, 'فلتر التشطيب');
     if (!ok) { document.getElementById('ax-fin').value = ''; persist(); }
+    var st = document.getElementById('ax-sum-text'); if (st) st.textContent = filterSummary();
     render();
   }
 
@@ -966,7 +968,7 @@
     var panel = buildUI();
     if (window.AXApp) {
       // Android app: the search screen is the home screen
-      document.getElementById('ax-title').textContent = 'Aqar Finder';
+      document.getElementById('ax-title').innerHTML = 'Aqar Finder <small style="font-weight:400;opacity:.75;font-size:11px">v' + AX_VERSION + '</small>';
       panel.classList.add('open');
     }
     var h = new URLSearchParams(location.hash.replace(/^#/, ''));
