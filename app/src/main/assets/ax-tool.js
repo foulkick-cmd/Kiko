@@ -6,7 +6,7 @@
 (function () {
   'use strict';
   if (window.__AX_LOADED__) return;
-  var AX_VERSION = '1.13';
+  var AX_VERSION = '1.13.1';
   window.__AX_LOADED__ = true;
 
   // ---------------------------------------------------------------- config
@@ -696,7 +696,7 @@
       // only units that pass the OTHER filters matter here
       var lacking = filtered(Object.assign({}, f, { fin: '' })).filter(function (u) { return !hasDetails(u); }).length;
       if (lacking) finNote = ' <span style="color:#b45309">— ' + lacking.toLocaleString('en-US') +
-        ' وحدة مطابقة لباقي الفلاتر لسه تشطيبها ماتجابش' + (S.running ? '؛ هيتجاب أوتوماتيك بعد ما التحميل يخلص' : '؛ غيّر اختيار التشطيب علشان يتجاب') + '</span>';
+        ' وحدة مطابقة لباقي الفلاتر لسه تشطيبها ماتجابش' + (S.running ? (S.prefetchF ? '؛ بيتجاب دلوقتي بالتوازي مع التحميل (' + prefetching.size + ' شغالين)' : '؛ هيتجاب أوتوماتيك بعد ما التحميل يخلص') : '؛ غيّر اختيار التشطيب علشان يتجاب') + '</span>';
     }
     var head = '<div style="padding:6px 12px;font-size:12px;color:#475569">بعد الفلاتر: <b>' + list.length.toLocaleString('en-US') + '</b> وحدة' + finNote + '</div>';
     var MAX = 600; // keep the DOM light on phones; export has everything

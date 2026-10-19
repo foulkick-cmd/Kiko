@@ -10,8 +10,8 @@ android {
         applicationId 'com.kareem.aqarexittool'
         minSdk 29
         targetSdk 34
-        versionCode 19
-        versionName '1.13'
+        versionCode 20
+        versionName '1.13.1'
     }
 
     // fixed key so every new build installs as an update over the previous one
