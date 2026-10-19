@@ -6,7 +6,7 @@
 (function () {
   'use strict';
   if (window.__AX_LOADED__) return;
-  var AX_VERSION = '1.12.2';
+  var AX_VERSION = '1.13';
   window.__AX_LOADED__ = true;
 
   // ---------------------------------------------------------------- config
@@ -231,7 +231,10 @@
           var units = parseUnits(doc);
           units.forEach(function (u) {
             S.seen.add(u.code); S.seenUnits.set(u.code, u);
-            if (S.liveFilter && !S.units.has(u.code) && S.liveFilter(u)) { S.units.set(u.code, u); liveRender(); }
+            if (S.liveFilter && !S.units.has(u.code) && S.liveFilter(u)) {
+              S.units.set(u.code, u); liveRender();
+              if (S.prefetchF && passesNonFin(u, S.prefetchF)) prefetchDetail(u);
+            }
           });
           return { count: m ? Number(m[1].replace(/,/g, '')) : null, units: units };
         });
@@ -450,6 +453,16 @@
     return 'other';
   }
   var FIN_LABELS = { brick: 'طوب أحمر', semi: 'نص تشطيب', full: 'تشطيب كامل', other: 'تاني', none: 'غير مذكور' };
+
+  function passesNonFin(u, f) {
+    if (f.totalMin && !(u.total >= f.totalMin)) return false;
+    if (f.totalMax && !(u.total <= f.totalMax)) return false;
+    if (f.ppmMin && !(u.ppm >= f.ppmMin)) return false;
+    if (f.ppmMax && !(u.ppm <= f.ppmMax)) return false;
+    if (f.m2Min && !(u.m2 >= f.m2Min)) return false;
+    if (f.m2Max && !(u.m2 <= f.m2Max)) return false;
+    return true;
+  }
 
   function filtered(f) {
     var arr = [];
@@ -756,6 +769,8 @@
     if (S.running) return;
     S.running = true; S.cancel = false; S.needRerun = false;
     var f = readFilters();
+    S.prefetchF = f.fin ? f : null;
+    S.prefetchCount = 0;
     persist();
     setStatus('');
     try {
@@ -771,7 +786,7 @@
     } catch (e) {
       setStatus('<span class="warn">' + (S.cancel || e.message === 'cancelled' ? 'اتوقف. المعروض هو اللي اتحمّل لحد الإيقاف.' : 'حصلت مشكلة: ' + esc(e.message)) + '</span>');
     } finally {
-      S.running = false; queue.length = 0; S.liveFilter = null;
+      S.running = false; queue.length = 0; S.liveFilter = null; S.prefetchF = null;
       if (S.groupAreas && !S.compound && !S.nameQuery) {
         S.seenUnits.forEach(function (u, c) { if (!S.units.has(c) && S.groupAreas.has(norm(u.area))) S.units.set(c, u); });
       }
@@ -815,21 +830,74 @@
     detPending.add(u.id); detQueue.push(u); pumpDetails();
   }
   // fetch one unit page and fill finishing / installment end / floor / contract year
+  // Unit pages are big; the labels we need sit near the top. Read the stream and stop early.
+  var DET_STOP_AFTER = 'خلاص التقسيط';
+  function readUntil(resp) {
+    if (!resp.body || !resp.body.getReader || typeof TextDecoder === 'undefined') return resp.text();
+    var reader = resp.body.getReader(), dec = new TextDecoder('utf-8'), buf = '', seenAt = -1;
+    function pump() {
+      return reader.read().then(function (r) {
+        if (r.done) return buf;
+        buf += dec.decode(r.value, { stream: true });
+        if (seenAt < 0) { var i = buf.indexOf(DET_STOP_AFTER); if (i >= 0) seenAt = i; }
+        // keep ~6 KB after the last label so its value (and closing tags) are included
+        if (seenAt >= 0 && buf.length - seenAt > 6000) { try { reader.cancel(); } catch (e) { /* ignore */ } return buf; }
+        return pump();
+      });
+    }
+    return pump();
+  }
+  function parseDetail(u, h) {
+    var doc = new DOMParser().parseFromString(h, 'text/html');
+    var t = texts(doc, doc.body);
+    return {
+      fin: labelValue(t, DET_LABELS.fin), pay: labelValue(t, DET_LABELS.pay),
+      floor: labelValue(t, DET_LABELS.floor), cy: labelValue(t, DET_LABELS.cy)
+    };
+  }
   function fetchDetail(u) {
     return fetch(u.url, { credentials: 'include' }).then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.text();
+      if (!r.ok) { var e = new Error('HTTP ' + r.status); e.status = r.status; throw e; }
+      return readUntil(r);
     }).then(function (h) {
-      var doc = new DOMParser().parseFromString(h, 'text/html');
-      var t = texts(doc, doc.body);
-      u.fin = labelValue(t, DET_LABELS.fin) || 'غير مذكور';
-      u.payEnd = labelValue(t, DET_LABELS.pay) || 'غير مذكور';
-      u.floor = labelValue(t, DET_LABELS.floor) || '';
-      u.cy = labelValue(t, DET_LABELS.cy) || '';
+      var d = parseDetail(u, h);
+      // early stop missed something (layout changed)? fall back to the whole page once
+      if (!d.fin && !d.pay) return fetch(u.url, { credentials: 'include' }).then(function (r) { return r.text(); }).then(function (h2) { return parseDetail(u, h2); });
+      return d;
+    }).then(function (d) {
+      u.fin = d.fin || 'غير مذكور';
+      u.payEnd = d.pay || 'غير مذكور';
+      u.floor = d.floor || '';
+      u.cy = d.cy || '';
       detCache[u.id] = { v: 2, fin: u.fin, pay: u.payEnd, floor: u.floor, cy: u.cy, t: Date.now() };
       saveDet();
       paintDetails(u);
     });
+  }
+  // separate pool for unit pages: starts at 6 in parallel, backs off if the site pushes back
+  var DP = { max: 6, active: 0, q: [], gap: 60 };
+  function detLimited(fn) {
+    return new Promise(function (resolve, reject) {
+      DP.q.push(function () {
+        DP.active++;
+        fn().then(resolve, function (e) {
+          if (e && (e.status === 429 || e.status === 403 || e.status === 503)) { DP.max = Math.max(2, DP.max - 2); DP.gap = Math.min(800, DP.gap * 2); }
+          reject(e);
+        }).finally(function () { DP.active--; setTimeout(detNext, DP.gap); });
+      });
+      detNext();
+    });
+  }
+  function detNext() { while (DP.active < DP.max && DP.q.length) DP.q.shift()(); }
+  var prefetching = new Set();
+  // while the list is loading with a finishing filter set, fetch details for matching units right away
+  function prefetchDetail(u) {
+    if (hasDetails(u) || prefetching.has(u.id) || (S.prefetchCount || 0) >= 1500) return;
+    S.prefetchCount = (S.prefetchCount || 0) + 1;
+    prefetching.add(u.id);
+    detLimited(function () { return S.cancel ? Promise.resolve() : fetchDetail(u); })
+      .catch(function () { /* retried by the filter step */ })
+      .finally(function () { prefetching.delete(u.id); liveRender(); });
   }
   function pumpDetails() {
     while (detActive < 2 && detQueue.length) {
@@ -893,26 +961,31 @@
     if (!missing.length) return true;
     if (missing.length > DETAILS_CONFIRM &&
       !(await axConfirm(why + ' محتاج يجيب التشطيب وآخر قسط لـ ' + missing.length.toLocaleString('en-US') +
-        ' وحدة (طلب لكل وحدة).<br>ده هياخد وقت وإنترنت (تقريباً ' + Math.ceil(missing.length / 150) + ' دقيقة).<br><br>لو لأ: ضيّق الفلاتر الأول علشان العدد يقل.'))) {
+        ' وحدة (صفحة لكل وحدة).<br>تقريباً ' + Math.max(1, Math.ceil(missing.length / 400)) + '–' + Math.max(2, Math.ceil(missing.length / 200)) + ' دقيقة، والنتايج بتظهر أول بأول.<br><br>لو لأ: ضيّق الفلاتر الأول علشان العدد يقل.'))) {
       setStatus('<span class="warn">' + why + ' اتلغى بناءً على اختيارك. ضيّق الفلاتر (منطقة، سعر متر، مساحة) علشان العدد يقل، أو اختار تاني ووافق.</span>');
       return false;
     }
     S.running = true; S.cancel = false;
-    var done = 0, failed = 0;
-    var msg = function () { return why + ': بجيب التفاصيل ' + done + ' من ' + missing.length + ' — "إيقاف" يكمّل باللي اتجاب'; };
+    var done = 0, failed = 0, t0 = Date.now();
+    var msg = function () {
+      var el = (Date.now() - t0) / 1000, left = done ? Math.round((missing.length - done) * el / done) : null;
+      return why + ': بجيب التفاصيل ' + done + ' من ' + missing.length +
+        (left != null ? ' — باقي حوالي ' + (left > 90 ? Math.ceil(left / 60) + ' دقيقة' : left + ' ثانية') : '') +
+        ' — "إيقاف" يكمّل باللي اتجاب';
+    };
     setStatus(msg());
     try {
       await Promise.all(missing.map(function (u) {
-        return limited(function () {
-          if (S.cancel) return Promise.resolve();
-          return fetchDetail(u).catch(function () { failed++; }).then(function () {
-            done++;
-            if (done % 5 === 0 || done === missing.length) { setStatus(msg()); liveRender(); }
-          });
+        return detLimited(function () {
+          if (S.cancel || hasDetails(u)) return Promise.resolve();
+          return fetchDetail(u);
+        }).catch(function () { failed++; }).then(function () {
+          done++;
+          if (done % 5 === 0 || done === missing.length) { setStatus(msg()); liveRender(); }
         });
       }));
     } finally {
-      S.running = false; queue.length = 0;
+      S.running = false; DP.q.length = 0;
     }
     setStatus('اتجابت التفاصيل لـ ' + (done - failed) + ' من ' + missing.length + (failed ? ' (' + failed + ' فشلت)' : '') + (S.cancel ? ' — اتوقف، والنتيجة فيها اللي اتجاب بس' : ''));
     return true;
