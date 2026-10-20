@@ -6,7 +6,7 @@
 (function () {
   'use strict';
   if (window.__AX_LOADED__) return;
-  var AX_VERSION = '1.15.0';
+  var AX_VERSION = '1.15.1';
   window.__AX_LOADED__ = true;
 
   // ---------------------------------------------------------------- config
@@ -935,14 +935,29 @@
       paintDetails(u);
     });
   }
-  // separate pool for unit pages: starts at 6 in parallel, backs off if the site pushes back
-  var DP = { max: 6, active: 0, q: [], gap: 60 };
+  // separate pool for unit pages. Adaptive: starts at 8 parallel, +1 after every 20 successes up to 12,
+  // backs off (-2, longer gap) on 429/403/503 and remembers a lower ceiling so it doesn't oscillate.
+  var DP = { max: 8, cap: 12, floor: 2, active: 0, q: [], gap: 40, ok: 0, slow: false, lastBack: 0 };
+  function detSpeedNote() { return DP.slow ? ' — الموقع بطّأ الطلبات فنزّلت لـ ' + DP.max + ' في نفس الوقت' : ''; }
   function detLimited(fn) {
     return new Promise(function (resolve, reject) {
       DP.q.push(function () {
         DP.active++;
-        fn().then(resolve, function (e) {
-          if (e && (e.status === 429 || e.status === 403 || e.status === 503)) { DP.max = Math.max(2, DP.max - 2); DP.gap = Math.min(800, DP.gap * 2); }
+        fn().then(function (v) {
+          if (++DP.ok >= 20) {
+            DP.ok = 0;
+            if (DP.max < DP.cap) DP.max++;
+            DP.gap = Math.max(40, Math.round(DP.gap / 2));
+            if (DP.max >= 8) DP.slow = false;
+          }
+          resolve(v);
+        }, function (e) {
+          if (e && (e.status === 429 || e.status === 403 || e.status === 503) && Date.now() - DP.lastBack > 3000) {
+            DP.lastBack = Date.now(); DP.ok = 0; DP.slow = true;
+            DP.cap = Math.max(DP.floor, DP.max - 1);
+            DP.max = Math.max(DP.floor, DP.max - 2);
+            DP.gap = Math.min(800, DP.gap * 2);
+          }
           reject(e);
         }).finally(function () { DP.active--; setTimeout(detNext, DP.gap); });
       });
@@ -1057,7 +1072,7 @@
       var el = (Date.now() - t0) / 1000, left = done ? Math.round((missing.length - done) * el / done) : null;
       return why + ': بجيب التفاصيل ' + done + ' من ' + missing.length +
         (left != null ? ' — باقي حوالي ' + (left > 90 ? Math.ceil(left / 60) + ' دقيقة' : left + ' ثانية') : '') +
-        ' — "إيقاف" يكمّل باللي اتجاب';
+        detSpeedNote() + ' — "إيقاف" يكمّل باللي اتجاب';
     };
     setStatus(msg());
     try {
