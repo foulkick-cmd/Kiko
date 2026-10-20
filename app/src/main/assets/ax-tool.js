@@ -6,7 +6,7 @@
 (function () {
   'use strict';
   if (window.__AX_LOADED__) return;
-  var AX_VERSION = '1.14.1';
+  var AX_VERSION = '1.15.0';
   window.__AX_LOADED__ = true;
 
   // ---------------------------------------------------------------- config
@@ -125,6 +125,38 @@
   }
   function after(t, label) { var i = t.indexOf(label); return i >= 0 ? t[i + 1] : null; }
 
+  // "مميزة" = the gold star on the card's photo. It is an icon (no text), so look for a star-like svg
+  // (by name, known star path, or gold colour on an icon that carries no text), or a star character.
+  var DIAG = { cards: [] };
+  var STAR_NAME = /star|featured|premium|مميز/i;
+  var STAR_PATH = /^\s*M\s*11\.525\s+2\.295|^\s*M\s*12\s+17\.27|^\s*M\s*12\s+\.587|^\s*M\s*12\s+2\s*l\s*3\.09|^\s*M\s*12\s+2\s*L\s*15\.09/;
+  var GOLD = /amber|yellow|gold|f59e0b|fbbf24|facc15|eab308|ffc107|ffb400|f5b301/i;
+  function attrsOf(e) {
+    var s = '';
+    for (var i = 0; i < e.attributes.length; i++) if (e.attributes[i].name !== 'd') s += ' ' + e.attributes[i].name + '=' + e.attributes[i].value;
+    return s;
+  }
+  function isFeatured(art) {
+    if (/[★⭐]/.test(art.textContent)) return true;
+    var named = art.querySelectorAll('[class],[aria-label],[title],[alt],[data-icon],[data-testid]');
+    for (var i = 0; i < named.length; i++) {
+      var e = named[i];
+      if (e.closest && e.closest('h2')) continue;
+      var a = ['class', 'aria-label', 'title', 'alt', 'data-icon', 'data-testid'].map(function (k) { return e.getAttribute(k) || ''; }).join(' ');
+      if (STAR_NAME.test(a) && !/start|restart|stats?\b/i.test(a)) return true;
+    }
+    var svgs = art.querySelectorAll('svg');
+    for (var j = 0; j < svgs.length; j++) {
+      var sv = svgs[j], parts = [sv].concat([].slice.call(sv.querySelectorAll('*')));
+      var path = '', attrs = '';
+      parts.forEach(function (n) { attrs += attrsOf(n); if (n.getAttribute && n.getAttribute('d') && !path) path = n.getAttribute('d'); });
+      if (STAR_PATH.test(path)) return true;
+      var holder = sv.parentElement, txt = holder ? holder.textContent.trim() : '';
+      if (GOLD.test(attrs) && (!txt || /مميز|featured/i.test(txt))) return true;
+    }
+    return false;
+  }
+
   function parseUnits(doc) {
     var out = [];
     var arts = doc.querySelectorAll('article[data-analytics-unit]');
@@ -133,6 +165,7 @@
       var t = texts(doc, art);
       if (!t.length) continue;
       var id = art.getAttribute('data-analytics-unit');
+      if (DIAG.cards.length < 4) DIAG.cards.push(art.innerHTML.split('<h2')[0].slice(0, 2200));
       var codeI = -1;
       for (var i = 0; i < t.length; i++) if (/^U-\d+$/.test(t[i])) { codeI = i; break; }
       var h2 = art.querySelector('h2');
@@ -171,6 +204,7 @@
         total: total,
         ppm: (total && m2) ? total / m2 : null,
         neg: t.some(function (x) { return x.indexOf('قابل للتفاوض') >= 0; }),
+        feat: isFeatured(art),
         delivery: t.indexOf('الاستلام') >= 0 ? num(after(t, 'الاستلام')) : null,
         inst: t.indexOf('القسط') >= 0 ? num(after(t, 'القسط')) : null,
         freq: (function () {
@@ -443,6 +477,7 @@
       m2Min: n('ax-amin'), m2Max: n('ax-amax'),
       contractBy: g('ax-contract') || '',
       fin: g('ax-fin') || '',
+      feat: g('ax-feat') || '',
       sort: g('ax-sort') || 'ppm'
     };
   }
@@ -474,6 +509,7 @@
     S.units.forEach(function (u) {
       if (u.total == null && u.ppmC === undefined) applyDet(u);   // total missing on the card: use the cached unit-page price
       if (f.fin && finCat(u) !== f.fin) return;
+      if (f.feat && !u.feat) return;
       if (f.totalMin && !(u.total >= f.totalMin)) return;
       if (f.totalMax && !(u.total <= f.totalMax)) return;
       if (f.ppmMin && !(u.ppm >= f.ppmMin)) return;
@@ -583,9 +619,10 @@
       '<label>التشطيب<select id="ax-fin"><option value="">أي تشطيب</option>' +
       ['brick', 'semi', 'full', 'other', 'none'].map(function (k) { return '<option value="' + k + '">' + FIN_LABELS[k] + '</option>'; }).join('') +
       '</select></label>' +
+      '<label>المميزة<select id="ax-feat"><option value="">الكل</option><option value="1">⭐ مميزة بس</option></select></label>' +
       '<label>ترتيب (من الأقل)<select id="ax-sort"><option value="ppm">سعر المتر</option><option value="total">إجمالي العقد</option><option value="m2">المساحة</option><option value="delivery">سنة الاستلام</option></select></label>' +
       '<label>العرض<select id="ax-view"><option value="table">جدول</option><option value="cards">كروت</option></select></label>' +
-      '<div id="ax-actions"><button class="pri" id="ax-run">تحميل الوحدات</button><button id="ax-stop">إيقاف</button><button id="ax-export">تصدير Excel</button></div>' +
+      '<div id="ax-actions"><button class="pri" id="ax-run">تحميل الوحدات</button><button id="ax-stop">إيقاف</button><button id="ax-export">تصدير Excel</button><button id="ax-diag">🔍 تشخيص المميزة</button></div>' +
       '</div>' +
       '<div id="ax-sum" style="display:none"><span id="ax-sum-text"></span><button id="ax-toggle">⚙️ الفلاتر</button></div>' +
       '<div id="ax-status">اختار المنطقة واضغط "تحميل الوحدات". الفلاتر والترتيب بيتطبقوا فوراً بعد التحميل.</div>' +
@@ -594,10 +631,10 @@
     document.body.appendChild(panel);
 
     var s = loadSettings();
-    ['ax-group', 'ax-tmin', 'ax-tmax', 'ax-pmin', 'ax-pmax', 'ax-amin', 'ax-amax', 'ax-contract', 'ax-fin', 'ax-sort', 'ax-view'].forEach(function (id) {
+    ['ax-group', 'ax-tmin', 'ax-tmax', 'ax-pmin', 'ax-pmax', 'ax-amin', 'ax-amax', 'ax-contract', 'ax-fin', 'ax-feat', 'ax-sort', 'ax-view'].forEach(function (id) {
       var e = document.getElementById(id);
       if (s[id] != null) e.value = s[id];
-      var live = ['ax-tmin', 'ax-pmin', 'ax-pmax', 'ax-amin', 'ax-amax', 'ax-sort', 'ax-view'].indexOf(id) >= 0;
+      var live = ['ax-feat', 'ax-tmin', 'ax-pmin', 'ax-pmax', 'ax-amin', 'ax-amax', 'ax-sort', 'ax-view'].indexOf(id) >= 0;
       e.addEventListener(e.tagName === 'SELECT' ? 'change' : 'input', function () {
         persist();
         var st = document.getElementById('ax-sum-text'); if (st) st.textContent = filterSummary();
@@ -628,6 +665,7 @@
     document.getElementById('ax-name').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); goName(); } });
     document.getElementById('ax-stop').onclick = function () { S.cancel = true; };
     document.getElementById('ax-export').onclick = exportCSV;
+    document.getElementById('ax-diag').onclick = showDiag;
     document.getElementById('ax-results').addEventListener('click', onResultsClick);
     return panel;
   }
@@ -641,6 +679,7 @@
     rng('عقد', f.totalMin, f.totalMax); rng('متر', f.ppmMin, f.ppmMax); rng('م²', f.m2Min, f.m2Max);
     if (f.contractBy) p.push('تعاقد ≤' + f.contractBy);
     if (f.fin) p.push(FIN_LABELS[f.fin]);
+    if (f.feat) p.push('⭐ مميزة');
     var so = document.getElementById('ax-sort'); p.push('ترتيب: ' + so.options[so.selectedIndex].text);
     return p.join(' · ');
   }
@@ -655,7 +694,7 @@
 
   function persist() {
     var o = {};
-    ['ax-group', 'ax-tmin', 'ax-tmax', 'ax-pmin', 'ax-pmax', 'ax-amin', 'ax-amax', 'ax-contract', 'ax-fin', 'ax-sort', 'ax-view'].forEach(function (id) {
+    ['ax-group', 'ax-tmin', 'ax-tmax', 'ax-pmin', 'ax-pmax', 'ax-amin', 'ax-amax', 'ax-contract', 'ax-fin', 'ax-feat', 'ax-sort', 'ax-view'].forEach(function (id) {
       o[id] = document.getElementById(id).value;
     });
     saveSettings(o);
@@ -732,7 +771,7 @@
       '<button class="ax-btn" data-cmp="' + esc(u.name) + '" data-area="' + esc(u.area) + '">الكمبوند ↗</button>';
   }
   function row(u, i, idx) {
-    return '<tr data-row="' + esc(u.code) + '"><td class="n">' + (i + 1) + '</td><td>' + esc(u.name) + '<br><small style="color:#64748b">' + esc(u.code) + (u.neg ? ' · <span class="ax-tag">تفاوض</span>' : '') + '</small></td>' +
+    return '<tr data-row="' + esc(u.code) + '"><td class="n">' + (i + 1) + '</td><td>' + (u.feat ? '⭐ ' : '') + esc(u.name) + '<br><small style="color:#64748b">' + esc(u.code) + (u.neg ? ' · <span class="ax-tag">تفاوض</span>' : '') + '</small></td>' +
       '<td>' + esc(u.area) + '</td><td>' + esc(u.type) + (u.beds ? ' · ' + u.beds + 'غ' : '') + '</td>' +
       '<td class="n">' + fmt(u.m2) + '</td>' +
       '<td data-det="' + esc(u.code) + '" data-k="fin">' + detText(u.fin) + '</td>' +
@@ -742,7 +781,7 @@
       '<td>' + cmpHTML(idx, u) + '</td><td>' + btns(u) + '</td></tr>';
   }
   function card(u, idx) {
-    return '<div class="ax-card" data-row="' + esc(u.code) + '"><h4>' + esc(u.name) + '</h4><div class="sub">' + esc(u.dev) + ' · ' + esc(u.area) + ' · ' + esc(u.code) + (u.neg ? ' · <span class="ax-tag">تفاوض</span>' : '') + '</div>' +
+    return '<div class="ax-card" data-row="' + esc(u.code) + '"><h4>' + (u.feat ? '⭐ ' : '') + esc(u.name) + '</h4><div class="sub">' + esc(u.dev) + ' · ' + esc(u.area) + ' · ' + esc(u.code) + (u.neg ? ' · <span class="ax-tag">تفاوض</span>' : '') + '</div>' +
       '<div class="kv"><span>التشطيب</span><span data-det="' + esc(u.code) + '" data-k="fin">' + detText(u.fin) + '</span></div>' +
       '<div class="kv"><span>سعر المتر</span><span class="big">' + fmt(u.ppm) + '</span></div>' +
       '<div class="kv"><span>إجمالي العقد</span><span>' + fmt(u.total) + '</span></div>' +
@@ -964,6 +1003,27 @@
   // ---------------------------------------------------------------- export (CSV, opens in Excel)
   var DETAILS_CONFIRM = 500;
   // in-page yes/no box (the Android WebView silently answers "no" to window.confirm)
+  // shows how many cards were detected as "مميزة" and the raw top part of the first cards, to check the detection
+  function showDiag() {
+    var all = new Map(); S.seenUnits.forEach(function (u, c) { all.set(c, u); }); S.units.forEach(function (u, c) { all.set(c, u); });
+    var n = 0; all.forEach(function (u) { if (u.feat) n++; });
+    var txt = 'مميزة: ' + n + ' من ' + all.size + '\n\n' + (DIAG.cards.length ? DIAG.cards.map(function (h, i) { return '--- كارت ' + (i + 1) + ' ---\n' + h; }).join('\n\n') : '(لسه ما اتحمّلش حاجة)');
+    var ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:16px;direction:rtl;font:14px system-ui,sans-serif';
+    ov.innerHTML = '<div style="background:#fff;color:#0f172a;border-radius:14px;max-width:460px;width:100%;padding:14px;box-shadow:0 10px 30px rgba(0,0,0,.3)">' +
+      '<div style="margin-bottom:8px;line-height:1.6">تشخيص المميزة: اتعرف <b>' + n + '</b> وحدة مميزة من ' + all.size + '. لو الرقم غلط، انسخ النص ده وابعته.</div>' +
+      '<textarea readonly dir="ltr" style="width:100%;height:220px;box-sizing:border-box;font:11px monospace;border:1px solid #cbd5e1;border-radius:8px;padding:6px"></textarea>' +
+      '<div style="display:flex;gap:8px;margin-top:8px"><button data-a="copy" style="flex:1;padding:10px;border:0;border-radius:9px;background:#0f766e;color:#fff;font:600 14px inherit">نسخ</button>' +
+      '<button data-a="close" style="flex:1;padding:10px;border:0;border-radius:9px;background:#e2e8f0;color:#0f172a;font:600 14px inherit">قفل</button></div></div>';
+    var ta = ov.querySelector('textarea'); ta.value = txt;
+    ov.addEventListener('click', function (e) {
+      var b = e.target.closest('[data-a]'); if (!b) return;
+      if (b.getAttribute('data-a') === 'close') { ov.remove(); return; }
+      try { ta.select(); ta.setSelectionRange(0, ta.value.length); document.execCommand('copy'); b.textContent = 'اتنسخ ✓'; }
+      catch (er) { b.textContent = 'اضغط مطوّل على النص وانسخ'; }
+    });
+    document.body.appendChild(ov);
+  }
   function axConfirm(html) {
     return new Promise(function (resolve) {
       var ov = document.createElement('div');
@@ -1038,12 +1098,12 @@
     list = filtered(readFilters());
     var idx = compoundIndex();
     var cols = ['الكود', 'الكمبوند', 'المطور', 'المنطقة', 'النوع', 'الغرف', 'المساحة م2', 'التشطيب', 'سعر المتر', 'إجمالي العقد',
-      'عمولة 1.25%', 'كاش', 'متبقي', 'القسط', 'الدورية', 'الاستلام', 'آخر قسط', 'سنة التعاقد', 'الدور', 'قابل للتفاوض', 'أرخص 1', 'أرخص 2', 'أرخص 3', 'الرابط'];
+      'عمولة 1.25%', 'كاش', 'متبقي', 'القسط', 'الدورية', 'الاستلام', 'آخر قسط', 'سنة التعاقد', 'الدور', 'قابل للتفاوض', 'مميزة', 'أرخص 1', 'أرخص 2', 'أرخص 3', 'الرابط'];
     var lines = [cols.join(',')];
     list.forEach(function (u) {
       var o = cheapestOthers(idx, u);
       var v = [u.code, u.name, u.dev, u.area, u.type, u.beds, u.m2, u.fin, u.ppm && Math.round(u.ppm), u.total,
-        u.total && Math.round(u.total * 0.0125), u.cash, u.remaining, u.inst, u.freq, u.delivery, u.payEnd, u.cy, u.floor, u.neg ? 'نعم' : '',
+        u.total && Math.round(u.total * 0.0125), u.cash, u.remaining, u.inst, u.freq, u.delivery, u.payEnd, u.cy, u.floor, u.neg ? 'نعم' : '', u.feat ? 'نعم' : '',
         o[0] && Math.round(o[0].ppm), o[1] && Math.round(o[1].ppm), o[2] && Math.round(o[2].ppm), u.url];
       lines.push(v.map(function (x) {
         x = x == null ? '' : String(x);
