@@ -6,7 +6,7 @@
 (function () {
   'use strict';
   if (window.__AX_LOADED__) return;
-  var AX_VERSION = '1.13.1';
+  var AX_VERSION = '1.14.0';
   window.__AX_LOADED__ = true;
 
   // ---------------------------------------------------------------- config
@@ -42,6 +42,8 @@
   var GROUPS = [
     { id: 'all', label: 'القاهرة الكبرى كلها', areas: [].concat(G_NEWCAIRO, G_EAST, G_OCT, G_OTHER), free: G_EAST_FREE },
     { id: 'newcairo', label: 'القاهرة الجديدة (التجمعات والرحاب)', areas: G_NEWCAIRO, free: [] },
+    { id: 'eastcombo', label: 'التجمع + الشروق + العاصمة + مدينتي + الشرقية (من غير بدر والعبور)',
+      areas: [].concat(G_NEWCAIRO, G_EAST.filter(function (a) { return a !== 'بدر' && a !== 'العبور'; })), free: G_EAST_FREE },
     { id: 'east', label: 'العاصمة والشروق والعبور والمستقبل', areas: G_EAST, free: G_EAST_FREE },
     { id: 'oct', label: 'ناحية أكتوبر وزايد', areas: G_OCT, free: [] },
     { id: 'other', label: 'باقي القاهرة والجيزة', areas: G_OTHER, free: [] }
@@ -63,11 +65,13 @@
     'الفيوم', 'بني سويف', 'المنيا', 'أسيوط', 'سوهاج', 'قنا', 'الأقصر', 'أسوان', 'الغردقة الجديدة',
     'طيبة الجديدة', 'أخميم الجديدة'];
   function findGroup(id) {
-    if (id && id.indexOf('a:') === 0) {
+    // empty area filter = no area restriction: every area the site lists (+ seller-typed east areas)
+    if (!id) return { id: '', label: 'من غير منطقة', areas: SITE_AREAS, free: G_EAST_FREE, any: true };
+    if (id.indexOf('a:') === 0) {
       var a = id.slice(2);
       return { id: id, label: a, areas: [a], free: [] };
     }
-    return GROUPS.filter(function (x) { return x.id === id; })[0] || GROUPS[1];
+    return GROUPS.filter(function (x) { return x.id === id; })[0] || GROUPS.filter(function (x) { return x.id === 'newcairo'; })[0];
   }
 
   // ---------------------------------------------------------------- state
@@ -338,8 +342,9 @@
 
   async function runGroup(group, f) {
     S.units = new Map(); S.coverage = []; S.seen = new Set(); S.seenUnits = new Map(); S.expected = null; fetchCount = 0;
+    S.groupAny = !!group.any;
     S.groupAreas = new Set(group.areas.map(norm));
-    S.liveFilter = function (u) { return S.groupAreas.has(norm(u.area)); };
+    S.liveFilter = function (u) { return S.groupAny || S.groupAreas.has(norm(u.area)); };
     var base = serverQS(f);
     // quick count per area first, so progress shows the real target
     var counts = await Promise.all(group.areas.map(function (area) {
@@ -432,7 +437,7 @@
     var g = function (id) { var el = document.getElementById(id); return el ? el.value : ''; };
     var n = function (id) { var v = num(g(id)); return v || null; };
     return {
-      group: g('ax-group') || 'newcairo',
+      group: document.getElementById('ax-group') ? g('ax-group') : 'newcairo',
       totalMin: n('ax-tmin'), totalMax: n('ax-tmax'),
       ppmMin: n('ax-pmin'), ppmMax: n('ax-pmax'),
       m2Min: n('ax-amin'), m2Max: n('ax-amax'),
@@ -559,6 +564,7 @@
     for (var y = new Date().getFullYear(); y >= 2015; y--) years += '<option value="' + y + '">' + y + ' أو أقدم</option>';
     var groups = '<optgroup label="مجموعات">' +
       GROUPS.map(function (g) { return '<option value="' + g.id + '">' + esc(g.label) + '</option>'; }).join('') +
+      '<option value="">— من غير منطقة (كل مناطق الموقع) —</option>' +
       '</optgroup><optgroup label="منطقة واحدة">' +
       SITE_AREAS.map(function (a) { return '<option value="a:' + esc(a) + '">' + esc(a) + '</option>'; }).join('') +
       '</optgroup>';
@@ -788,7 +794,7 @@
     } finally {
       S.running = false; queue.length = 0; S.liveFilter = null; S.prefetchF = null;
       if (S.groupAreas && !S.compound && !S.nameQuery) {
-        S.seenUnits.forEach(function (u, c) { if (!S.units.has(c) && S.groupAreas.has(norm(u.area))) S.units.set(c, u); });
+        S.seenUnits.forEach(function (u, c) { if (!S.units.has(c) && (S.groupAny || S.groupAreas.has(norm(u.area)))) S.units.set(c, u); });
       }
       render();
     }
