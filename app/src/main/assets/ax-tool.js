@@ -6,7 +6,7 @@
 (function () {
   'use strict';
   if (window.__AX_LOADED__) return;
-  var AX_VERSION = '1.14.0';
+  var AX_VERSION = '1.14.1';
   window.__AX_LOADED__ = true;
 
   // ---------------------------------------------------------------- config
@@ -237,7 +237,7 @@
             S.seen.add(u.code); S.seenUnits.set(u.code, u);
             if (S.liveFilter && !S.units.has(u.code) && S.liveFilter(u)) {
               S.units.set(u.code, u); liveRender();
-              if (S.prefetchF && passesNonFin(u, S.prefetchF)) prefetchDetail(u);
+              if (u.total == null || (S.prefetchF && passesNonFin(u, S.prefetchF))) prefetchDetail(u);
             }
           });
           return { count: m ? Number(m[1].replace(/,/g, '')) : null, units: units };
@@ -472,6 +472,7 @@
   function filtered(f) {
     var arr = [];
     S.units.forEach(function (u) {
+      if (u.total == null && u.ppmC === undefined) applyDet(u);   // total missing on the card: use the cached unit-page price
       if (f.fin && finCat(u) !== f.fin) return;
       if (f.totalMin && !(u.total >= f.totalMin)) return;
       if (f.totalMax && !(u.total <= f.totalMax)) return;
@@ -813,9 +814,21 @@
     clearTimeout(detSaveTimer);
     detSaveTimer = setTimeout(function () { try { localStorage.setItem('ax_details', JSON.stringify(detCache)); } catch (e) { /* full */ } }, 800);
   }
+  // card had no "المتبقي" (e.g. ready units): total = the site's contract price per m² x area, as written on the unit page
+  function deriveTotal(u, quiet) {
+    if (u.total != null || !u.ppmC) return;
+    var a = u.m2 || u.pm2;
+    if (!a) return;
+    u.m2 = a; u.ppm = u.ppmC; u.total = u.ppmC * a; u.derived = true;
+    if (!quiet) liveRender();
+  }
   function applyDet(u) {
     var c = detCache[u.id];
-    if (c && c.v === 2 && Date.now() - c.t < DET_TTL) { u.fin = c.fin; u.payEnd = c.pay; u.floor = c.floor; u.cy = c.cy; return true; }
+    if (c && c.v === 2 && Date.now() - c.t < DET_TTL) {
+      u.fin = c.fin; u.payEnd = c.pay; u.floor = c.floor; u.cy = c.cy; u.ppmC = c.ppmC; u.pm2 = c.pm2;
+      deriveTotal(u, true);
+      return true;
+    }
     return false;
   }
   function labelValue(t, label) {
@@ -858,7 +871,8 @@
     var t = texts(doc, doc.body);
     return {
       fin: labelValue(t, DET_LABELS.fin), pay: labelValue(t, DET_LABELS.pay),
-      floor: labelValue(t, DET_LABELS.floor), cy: labelValue(t, DET_LABELS.cy)
+      floor: labelValue(t, DET_LABELS.floor), cy: labelValue(t, DET_LABELS.cy),
+      ppmC: num(labelValue(t, 'سعر المتر بالتعاقد')), m2: num(labelValue(t, 'المساحة'))
     };
   }
   function fetchDetail(u) {
@@ -875,7 +889,9 @@
       u.payEnd = d.pay || 'غير مذكور';
       u.floor = d.floor || '';
       u.cy = d.cy || '';
-      detCache[u.id] = { v: 2, fin: u.fin, pay: u.payEnd, floor: u.floor, cy: u.cy, t: Date.now() };
+      u.ppmC = d.ppmC || null; u.pm2 = d.m2 || null;
+      deriveTotal(u);
+      detCache[u.id] = { v: 2, fin: u.fin, pay: u.payEnd, floor: u.floor, cy: u.cy, ppmC: u.ppmC, pm2: u.pm2, t: Date.now() };
       saveDet();
       paintDetails(u);
     });
@@ -913,7 +929,11 @@
         .finally((function (u) { return function () { detActive--; detPending.delete(u.id); setTimeout(pumpDetails, 120); }; })(u));
     }
   }
-  function hasDetails(u) { return (u.fin !== undefined && u.cy !== undefined) || applyDet(u); }
+  function hasDetails(u) {
+    var ok = (u.fin !== undefined && u.cy !== undefined) || applyDet(u);
+    // a unit whose card had no total also needs the contract price per m² from its page
+    return ok && (u.total != null || u.ppmC !== undefined);
+  }
   function detText(v) { return v === undefined ? '<span style="color:#94a3b8">…</span>' : esc(v); }
   function paintDetails(u) {
     var els = document.querySelectorAll('[data-det="' + u.code + '"]');
