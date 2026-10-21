@@ -6,7 +6,7 @@
 (function () {
   'use strict';
   if (window.__AX_LOADED__) return;
-  var AX_VERSION = '1.16.3';
+  var AX_VERSION = '1.16.4';
   window.__AX_LOADED__ = true;
 
   // ---------------------------------------------------------------- config
@@ -163,15 +163,19 @@
   function resolveStreamed(doc) {
     if (doc.__axResolved) return;
     doc.__axResolved = true;
-    doc.querySelectorAll('template[id^="B:"]').forEach(function (t) {
-      var src = doc.getElementById('S:' + t.id.slice(2));
-      if (!src || !t.parentNode) return;
-      // drop the skeleton fallback that sits between the template and the closing <!--/$--> marker
-      var n = t.nextSibling;
-      while (n && !(n.nodeType === 8 && n.data === '/$')) { var nx = n.nextSibling; n.parentNode.removeChild(n); n = nx; }
+    // content arrives as <div hidden id="S:n">; it goes where <template id="B:n"> (a boundary, with a
+    // skeleton after it up to <!--/$-->) or <template id="P:n"> (a plain placeholder) sits
+    doc.querySelectorAll('div[hidden][id^="S:"]').forEach(function (src) {
+      var n = src.id.slice(2);
+      var t = doc.getElementById('B:' + n) || doc.getElementById('P:' + n);
+      if (!t || !t.parentNode || t === src) return;
+      if (t.id.charAt(0) === 'B') {
+        var x = t.nextSibling;
+        while (x && !(x.nodeType === 8 && x.data === '/$')) { var nx = x.nextSibling; x.parentNode.removeChild(x); x = nx; }
+      }
       while (src.firstChild) t.parentNode.insertBefore(src.firstChild, t);
       t.parentNode.removeChild(t);
-      src.parentNode.removeChild(src);
+      if (src.parentNode) src.parentNode.removeChild(src);
     });
   }
 
@@ -1092,6 +1096,7 @@
           if (!links[path]) { links[path] = a; order.push(path); }
         });
         var codes = units.map(function (u) { return u.code; }), dup = codes.length - new Set(codes).size;
+        if (i === 0) out.push('النسخة ' + AX_VERSION + ' — ' + area);
         out.push('show=' + shows[i] + ': كل الـ article = ' + doc.querySelectorAll('article').length +
           '، بالعلامة = ' + doc.querySelectorAll('article[data-analytics-unit]').length +
           '، لينكات وحدات مختلفة = ' + order.length + '، اتقرت = ' + units.length + '، أكواد متكررة = ' + dup);
@@ -1107,6 +1112,11 @@
           }
           var pos = order.indexOf(p) + 1;
           out.push('--- كارت ما اتقراش #' + (k + 1) + ' (ترتيبه ' + pos + ') ---');
+          var sid = box.id || (box.closest && box.closest('[id^="S:"]') ? box.closest('[id^="S:"]').id : '');
+          if (sid) {
+            var num = sid.slice(2), ph = doc.getElementById('B:' + num) || doc.getElementById('P:' + num);
+            out.push('مكان الكارت: ' + (ph ? ph.outerHTML + ' جوه: ' + (ph.parentElement ? ph.parentElement.outerHTML.slice(0, 1500) : '') : 'مش لاقي B:' + num + ' ولا P:' + num));
+          }
           out.push(box.outerHTML.replace(/\s(srcset|sizes|style)="[^"]*"/g, '').slice(0, 3500));
         });
         // units read but with a missing price (they count, but show "—")
