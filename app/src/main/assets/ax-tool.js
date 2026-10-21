@@ -6,7 +6,7 @@
 (function () {
   'use strict';
   if (window.__AX_LOADED__) return;
-  var AX_VERSION = '1.15.1';
+  var AX_VERSION = '1.16.0';
   window.__AX_LOADED__ = true;
 
   // ---------------------------------------------------------------- config
@@ -292,35 +292,34 @@
       r.units.forEach(function (u) { got.set(u.code, u); });
       return { count: count, got: got };
     }
-    // > CAP: split
-    if (splitLevel === 0) {          // by type
-      var parts = await Promise.all(TYPES.map(function (t) { return fetchAll(qs + '&types=' + enc(t), 1); }));
-      parts.forEach(function (p) { p.got.forEach(function (u, c) { got.set(c, u); }); });
-      if (got.size < count) {
+    // > CAP: split. Searching (sort variants / names) is done ONCE, at the right level:
+    //  - sort variants only in the smallest cell (a parent's top-192 can't reach deeper than its child's),
+    //    or in a parent only when its parts don't add up to its count (types/readiness outside our lists);
+    //  - name search only at the top cell: q=name on the whole cell is a superset of q=name in any part.
+    if (splitLevel === 0 || splitLevel === 1) {
+      var lists = splitLevel === 0 ? TYPES.map(function (t) { return '&types=' + enc(t); })
+        : ['ready', 'offplan'].map(function (rd) { return '&readiness=' + rd; });
+      var parts = await Promise.all(lists.map(function (x) { return fetchAll(qs + x, splitLevel + 1); }));
+      var partSum = 0;
+      parts.forEach(function (p) { partSum += p.count || 0; p.got.forEach(function (u, c) { got.set(c, u); }); });
+      if (splitLevel === 0 && partSum < count) {
         // other types: only trust the filter if it actually narrowed the result
         var extra = await Promise.all(EXTRA_TYPES.map(function (t) { return getPage(qs + '&types=' + enc(t), PAGE).then(function (r) { return { t: t, r: r }; }); }));
         for (var e = 0; e < extra.length; e++) {
           var er = extra[e].r;
           if (er.count != null && er.count > 0 && er.count < count) {
             var full = await fetchAll(qs + '&types=' + enc(extra[e].t), 1);
+            partSum += full.count || 0;
             full.got.forEach(function (u, c) { got.set(c, u); });
           }
         }
       }
-      if (got.size < count) await sortUnion(qs, got, count);
-      if (got.size < count) await nameSearch(qs, got, count);
-      return { count: count, got: got };
-    }
-    if (splitLevel === 1) {          // by readiness
-      var rs = await Promise.all(['ready', 'offplan'].map(function (rd) { return fetchAll(qs + '&readiness=' + rd, 2); }));
-      rs.forEach(function (p) { p.got.forEach(function (u, c) { got.set(c, u); }); });
-      if (got.size < count) await sortUnion(qs, got, count);
-      if (got.size < count) await nameSearch(qs, got, count);
+      if (got.size < count && partSum < count) await sortUnion(qs, got, count);
+      if (splitLevel === 0 && got.size < count) await nameSearch(qs, got, count);
       return { count: count, got: got };
     }
     // level 2: cannot split further with exact filters
     await sortUnion(qs, got, count);
-    if (got.size < count) await nameSearch(qs, got, count);
     return { count: count, got: got };
   }
 
@@ -360,6 +359,9 @@
           if (r.count > PAGE && r.count <= CAP) {
             var r2 = await getPage(qs + '&q=' + enc(n), showFor(r.count));
             added += addNew(got, r2.units);
+          } else if (r.count > CAP) {
+            var bigs = await Promise.all(TYPES.map(function (t) { return fetchAll(qs + '&q=' + enc(n) + '&types=' + enc(t), 1); }));
+            bigs.forEach(function (b) { b.got.forEach(function (u, c) { if (!got.has(c)) { got.set(c, u); added++; } }); });
           }
           if (added > 0) stale = 0; else stale++;
         }));
@@ -719,7 +721,9 @@
       html += 'نتيجة البحث: <b>' + (cq.kept || 0) + '</b> وحدة' + (cq.per && cq.per.length > 1 ? ' (' + esc(cq.per.join(' · ')) + ')' : '') + '<br>';
     } else if (S.coverage.length && !S.compound) {
       html += 'التغطية: <b>' + got.toLocaleString('en-US') + ' من ' + total.toLocaleString('en-US') + '</b> وحدة' +
-        (partial.length ? ' — <span class="warn">ناقص: ' + esc(partial.join('، ')) + '</span>' : (S.running ? '' : ' ✓ كاملة')) + '<br>';
+        (partial.length ? ' — <span class="warn">ناقص: ' + esc(partial.join('، ')) + '</span>' +
+          (S.running ? '' : '<br><small>الناقص ما ظهرش في أي ترتيب ولا بحث بالاسم. غالباً عدّاد الموقع بيحسب وحدات مش معروضة (اتباعت أو متخبية).</small>')
+          : (S.running ? '' : ' ✓ كاملة')) + '<br>';
     }
     if (S.compound && S.coverage.length) {
       var c = S.coverage[0];
