@@ -6,7 +6,7 @@
 (function () {
   'use strict';
   if (window.__AX_LOADED__) return;
-  var AX_VERSION = '1.16.0';
+  var AX_VERSION = '1.16.1';
   window.__AX_LOADED__ = true;
 
   // ---------------------------------------------------------------- config
@@ -624,7 +624,7 @@
       '<label>المميزة<select id="ax-feat"><option value="">الكل</option><option value="1">⭐ مميزة بس</option></select></label>' +
       '<label>ترتيب (من الأقل)<select id="ax-sort"><option value="ppm">سعر المتر</option><option value="total">إجمالي العقد</option><option value="m2">المساحة</option><option value="delivery">سنة الاستلام</option></select></label>' +
       '<label>العرض<select id="ax-view"><option value="table">جدول</option><option value="cards">كروت</option></select></label>' +
-      '<div id="ax-actions"><button class="pri" id="ax-run">تحميل الوحدات</button><button id="ax-stop">إيقاف</button><button id="ax-export">تصدير Excel</button><button id="ax-diag">🔍 تشخيص المميزة</button></div>' +
+      '<div id="ax-actions"><button class="pri" id="ax-run">تحميل الوحدات</button><button id="ax-stop">إيقاف</button><button id="ax-export">تصدير Excel</button><button id="ax-diag">🔍 تشخيص المميزة</button><button id="ax-probe">🔬 اختبار طرق الحصر</button></div>' +
       '</div>' +
       '<div id="ax-sum" style="display:none"><span id="ax-sum-text"></span><button id="ax-toggle">⚙️ الفلاتر</button></div>' +
       '<div id="ax-status">اختار المنطقة واضغط "تحميل الوحدات". الفلاتر والترتيب بيتطبقوا فوراً بعد التحميل.</div>' +
@@ -668,6 +668,7 @@
     document.getElementById('ax-stop').onclick = function () { S.cancel = true; };
     document.getElementById('ax-export').onclick = exportCSV;
     document.getElementById('ax-diag').onclick = showDiag;
+    document.getElementById('ax-probe').onclick = probeParams;
     document.getElementById('ax-results').addEventListener('click', onResultsClick);
     return panel;
   }
@@ -1022,6 +1023,113 @@
   // ---------------------------------------------------------------- export (CSV, opens in Excel)
   var DETAILS_CONFIRM = 500;
   // in-page yes/no box (the Android WebView silently answers "no" to window.confirm)
+  // ---------------------------------------------------------------- probe: which hidden URL options does the site honour?
+  // Looks for a deterministic way past the 192 cap: paging, descending sorts, "min" filters, exact beds,
+  // developer/compound filters. Read-only, ~45 requests on one big area. Report is shown for copying.
+  function showText(title, txt) {
+    var ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:16px;direction:rtl;font:14px system-ui,sans-serif';
+    ov.innerHTML = '<div style="background:#fff;color:#0f172a;border-radius:14px;max-width:460px;width:100%;padding:14px;box-shadow:0 10px 30px rgba(0,0,0,.3)">' +
+      '<div style="margin-bottom:8px;line-height:1.6">' + title + '</div>' +
+      '<textarea readonly dir="rtl" style="width:100%;height:260px;box-sizing:border-box;font:12px monospace;border:1px solid #cbd5e1;border-radius:8px;padding:6px"></textarea>' +
+      '<div style="display:flex;gap:8px;margin-top:8px"><button data-a="copy" style="flex:1;padding:10px;border:0;border-radius:9px;background:#0f766e;color:#fff;font:600 14px inherit">نسخ</button>' +
+      '<button data-a="close" style="flex:1;padding:10px;border:0;border-radius:9px;background:#e2e8f0;color:#0f172a;font:600 14px inherit">قفل</button></div></div>';
+    var ta = ov.querySelector('textarea'); ta.value = txt;
+    ov.addEventListener('click', function (e) {
+      var b = e.target.closest('[data-a]'); if (!b) return;
+      if (b.getAttribute('data-a') === 'close') { ov.remove(); return; }
+      try { ta.select(); ta.setSelectionRange(0, ta.value.length); document.execCommand('copy'); b.textContent = 'اتنسخ ✓'; }
+      catch (er) { b.textContent = 'اضغط مطوّل على النص وانسخ'; }
+    });
+    document.body.appendChild(ov);
+  }
+  function monotonic(units, key) {
+    var v = units.map(function (u) { return u[key]; }).filter(function (x) { return x != null; });
+    if (v.length < 10) return '';
+    var up = true, down = true;
+    for (var i = 1; i < v.length; i++) { if (v[i] < v[i - 1]) up = false; if (v[i] > v[i - 1]) down = false; }
+    return up && !down ? 'تصاعدي' : down && !up ? 'تنازلي' : '';
+  }
+  function codesOf(r) { return r.units.map(function (u) { return u.code; }); }
+  function overlap(a, b) { var B = new Set(b); return a.filter(function (x) { return B.has(x); }).length; }
+  function median(arr) { arr = arr.filter(function (x) { return x != null; }).sort(function (a, b) { return a - b; }); return arr.length ? arr[Math.floor(arr.length / 2)] : null; }
+  async function probeParams() {
+    if (S.running) return;
+    S.running = true; S.cancel = false;
+    var g = findGroup(readFilters().group), area = g.areas[0];
+    var base = 'areas=' + enc(area), out = [], n0 = fetchCount;
+    var say = function (t) { setStatus('🔬 بختبر طرق الحصر على "' + esc(area) + '": ' + esc(t)); };
+    try {
+      say('القايمة الأساسية');
+      var r48 = await getPage(base + '&sort=newest', PAGE), r96 = await getPage(base + '&sort=newest', 96);
+      var N = r48.count, ref = codesOf(r48), second = codesOf(r96).slice(PAGE);
+      out.push('المنطقة: ' + area + ' — العدد ' + N + ' — النسخة ' + AX_VERSION);
+      // A) paging
+      out.push('', '[صفحات]');
+      var pg = ['page=2', 'p=2', 'pageNumber=2', 'offset=48', 'skip=48', 'start=48', 'from=48', 'cursor=48'];
+      for (var i = 0; i < pg.length; i++) {
+        say(pg[i]);
+        var r = await getPage(base + '&sort=newest&' + pg[i], PAGE), c = codesOf(r);
+        var ok = c.length && overlap(c, ref) === 0;
+        out.push((ok ? '✓ ' : '✗ ') + pg[i] + ' — ' + c.length + ' وحدة، متكرر مع الأولى ' + overlap(c, ref) + '، مطابق للصفحة التانية ' + overlap(c, second) + '/' + second.length);
+      }
+      // B) sorts
+      out.push('', '[ترتيب]');
+      var sorts = ['cash_desc', 'price_desc', 'price_asc', 'total_desc', 'total_asc', 'installment_desc', 'delivery_desc', 'remaining_desc', 'remaining_asc', 'area_desc', 'area_asc', 'size_desc', 'oldest', 'ppm_asc', 'ppm_desc'];
+      for (var j = 0; j < sorts.length; j++) {
+        say('sort=' + sorts[j]);
+        var rs = await getPage(base + '&sort=' + sorts[j], PAGE);
+        var same = overlap(codesOf(rs), ref) === ref.length && codesOf(rs).join() === ref.join();
+        var m = ['cash', 'total', 'remaining', 'm2', 'ppm', 'delivery', 'inst'].map(function (k) { var d = monotonic(rs.units, k); return d ? k + ' ' + d : ''; }).filter(Boolean);
+        out.push((same ? '✗ ' : (m.length ? '✓ ' : '? ')) + 'sort=' + sorts[j] + (same ? ' — زي الأحدث (متجاهَل)' : ' — ' + (m.join('، ') || 'مختلف بس مش مرتب بحاجة معروفة')));
+      }
+      // C) min / range filters
+      out.push('', '[حد أدنى]');
+      var mc = median(r96.units.map(function (u) { return u.cash; })), mt = median(r96.units.map(function (u) { return u.total; })),
+        mm = median(r96.units.map(function (u) { return u.m2; })), mr = median(r96.units.map(function (u) { return u.remaining; }));
+      var mins = [['minCash', mc, 'cash', 1], ['cashMin', mc, 'cash', 1], ['minPrice', mt, 'total', 1], ['priceMin', mt, 'total', 1],
+        ['minTotal', mt, 'total', 1], ['minRemaining', mr, 'remaining', 1], ['minArea', mm, 'm2', 1], ['areaMin', mm, 'm2', 1],
+        ['minSize', mm, 'm2', 1], ['maxArea', mm, 'm2', -1], ['maxSize', mm, 'm2', -1], ['maxRemaining', mr, 'remaining', -1]];
+      for (var k = 0; k < mins.length; k++) {
+        var mi = mins[k]; if (mi[1] == null) continue;
+        say(mi[0]);
+        var rm = await getPage(base + '&' + mi[0] + '=' + Math.round(mi[1]), PAGE);
+        var good = rm.units.length && rm.units.every(function (u) { return u[mi[2]] == null || (mi[3] > 0 ? u[mi[2]] >= mi[1] : u[mi[2]] <= mi[1]); });
+        var ok2 = rm.count != null && rm.count < N && rm.count > 0 && good;
+        out.push((ok2 ? '✓ ' : '✗ ') + mi[0] + '=' + Math.round(mi[1]) + ' — العدد ' + rm.count + ' من ' + N + (good ? '' : ' (النتايج مش ملتزمة)'));
+      }
+      // D) beds exact or minimum?
+      out.push('', '[غرف]');
+      for (var b = 1; b <= 4; b++) {
+        say('beds=' + b);
+        var rb = await getPage(base + '&beds=' + b, PAGE), bs = {};
+        rb.units.forEach(function (u) { bs[u.beds] = (bs[u.beds] || 0) + 1; });
+        out.push('beds=' + b + ' — العدد ' + rb.count + ' — الغرف في النتايج: ' + JSON.stringify(bs));
+      }
+      // E) developer / compound filters
+      out.push('', '[مطور / كمبوند]');
+      var u0 = r96.units.filter(function (u) { return u.dev && u.name; })[0];
+      if (u0) {
+        var fl = [['developers', u0.dev, 'dev'], ['developer', u0.dev, 'dev'], ['dev', u0.dev, 'dev'], ['compounds', u0.name, 'name'],
+          ['compound', u0.name, 'name'], ['projects', u0.name, 'name'], ['project', u0.name, 'name']];
+        for (var q = 0; q < fl.length; q++) {
+          say(fl[q][0]);
+          var rf = await getPage(base + '&' + fl[q][0] + '=' + enc(fl[q][1]), PAGE);
+          var all = rf.units.length && rf.units.every(function (u) { return norm(u[fl[q][2]]) === norm(fl[q][1]); });
+          out.push((rf.count < N && all ? '✓ ' : '✗ ') + fl[q][0] + '=' + fl[q][1] + ' — العدد ' + rf.count);
+        }
+      }
+      out.push('', 'طلبات الاختبار: ' + (fetchCount - n0));
+      setStatus('🔬 الاختبار خلص — انسخ التقرير وابعته');
+      showText('نتيجة اختبار طرق الحصر. دوس "نسخ" وابعتهولي.', out.join('\n'));
+    } catch (e) {
+      setStatus('<span class="warn">الاختبار وقف: ' + esc(e.message) + '</span>');
+      if (out.length) showText('الاختبار وقف قبل ما يخلص — ده اللي اتجمع:', out.join('\n'));
+    } finally {
+      S.running = false; queue.length = 0;
+    }
+  }
+
   // shows how many cards were detected as "مميزة" and the raw top part of the first cards, to check the detection
   function showDiag() {
     var all = new Map(); S.seenUnits.forEach(function (u, c) { all.set(c, u); }); S.units.forEach(function (u, c) { all.set(c, u); });
