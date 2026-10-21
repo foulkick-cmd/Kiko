@@ -6,7 +6,7 @@
 (function () {
   'use strict';
   if (window.__AX_LOADED__) return;
-  var AX_VERSION = '1.16.2';
+  var AX_VERSION = '1.16.3';
   window.__AX_LOADED__ = true;
 
   // ---------------------------------------------------------------- config
@@ -157,7 +157,26 @@
     return false;
   }
 
+  // The site streams some cards (React Suspense): the <article> holds only a placeholder
+  // <template id="B:n">, and the card body arrives later in <div hidden id="S:n"> that the page's own
+  // script moves in. DOMParser doesn't run scripts, so do that move here.
+  function resolveStreamed(doc) {
+    if (doc.__axResolved) return;
+    doc.__axResolved = true;
+    doc.querySelectorAll('template[id^="B:"]').forEach(function (t) {
+      var src = doc.getElementById('S:' + t.id.slice(2));
+      if (!src || !t.parentNode) return;
+      // drop the skeleton fallback that sits between the template and the closing <!--/$--> marker
+      var n = t.nextSibling;
+      while (n && !(n.nodeType === 8 && n.data === '/$')) { var nx = n.nextSibling; n.parentNode.removeChild(n); n = nx; }
+      while (src.firstChild) t.parentNode.insertBefore(src.firstChild, t);
+      t.parentNode.removeChild(t);
+      src.parentNode.removeChild(src);
+    });
+  }
+
   function parseUnits(doc) {
+    resolveStreamed(doc);
     var out = [];
     var arts = doc.querySelectorAll('article[data-analytics-unit]');
     for (var k = 0; k < arts.length; k++) {
