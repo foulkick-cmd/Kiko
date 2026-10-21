@@ -6,7 +6,7 @@
 (function () {
   'use strict';
   if (window.__AX_LOADED__) return;
-  var AX_VERSION = '1.16.1';
+  var AX_VERSION = '1.16.2';
   window.__AX_LOADED__ = true;
 
   // ---------------------------------------------------------------- config
@@ -624,7 +624,7 @@
       '<label>المميزة<select id="ax-feat"><option value="">الكل</option><option value="1">⭐ مميزة بس</option></select></label>' +
       '<label>ترتيب (من الأقل)<select id="ax-sort"><option value="ppm">سعر المتر</option><option value="total">إجمالي العقد</option><option value="m2">المساحة</option><option value="delivery">سنة الاستلام</option></select></label>' +
       '<label>العرض<select id="ax-view"><option value="table">جدول</option><option value="cards">كروت</option></select></label>' +
-      '<div id="ax-actions"><button class="pri" id="ax-run">تحميل الوحدات</button><button id="ax-stop">إيقاف</button><button id="ax-export">تصدير Excel</button><button id="ax-diag">🔍 تشخيص المميزة</button><button id="ax-probe">🔬 اختبار طرق الحصر</button></div>' +
+      '<div id="ax-actions"><button class="pri" id="ax-run">تحميل الوحدات</button><button id="ax-stop">إيقاف</button><button id="ax-export">تصدير Excel</button><button id="ax-diag">🔍 تشخيص المميزة</button><button id="ax-probe">🧩 فحص الكروت</button></div>' +
       '</div>' +
       '<div id="ax-sum" style="display:none"><span id="ax-sum-text"></span><button id="ax-toggle">⚙️ الفلاتر</button></div>' +
       '<div id="ax-status">اختار المنطقة واضغط "تحميل الوحدات". الفلاتر والترتيب بيتطبقوا فوراً بعد التحميل.</div>' +
@@ -1053,80 +1053,56 @@
   function codesOf(r) { return r.units.map(function (u) { return u.code; }); }
   function overlap(a, b) { var B = new Set(b); return a.filter(function (x) { return B.has(x); }).length; }
   function median(arr) { arr = arr.filter(function (x) { return x != null; }).sort(function (a, b) { return a - b; }); return arr.length ? arr[Math.floor(arr.length / 2)] : null; }
+  // Card check: does every unit the page shows get read? (the site said 48 but only 47 were read)
   async function probeParams() {
     if (S.running) return;
     S.running = true; S.cancel = false;
-    var g = findGroup(readFilters().group), area = g.areas[0];
-    var base = 'areas=' + enc(area), out = [], n0 = fetchCount;
-    var say = function (t) { setStatus('🔬 بختبر طرق الحصر على "' + esc(area) + '": ' + esc(t)); };
+    var g = findGroup(readFilters().group), area = g.areas[0], out = [];
     try {
-      say('القايمة الأساسية');
-      var r48 = await getPage(base + '&sort=newest', PAGE), r96 = await getPage(base + '&sort=newest', 96);
-      var N = r48.count, ref = codesOf(r48), second = codesOf(r96).slice(PAGE);
-      out.push('المنطقة: ' + area + ' — العدد ' + N + ' — النسخة ' + AX_VERSION);
-      // A) paging
-      out.push('', '[صفحات]');
-      var pg = ['page=2', 'p=2', 'pageNumber=2', 'offset=48', 'skip=48', 'start=48', 'from=48', 'cursor=48'];
-      for (var i = 0; i < pg.length; i++) {
-        say(pg[i]);
-        var r = await getPage(base + '&sort=newest&' + pg[i], PAGE), c = codesOf(r);
-        var ok = c.length && overlap(c, ref) === 0;
-        out.push((ok ? '✓ ' : '✗ ') + pg[i] + ' — ' + c.length + ' وحدة، متكرر مع الأولى ' + overlap(c, ref) + '، مطابق للصفحة التانية ' + overlap(c, second) + '/' + second.length);
+      var shows = [48, 192];
+      for (var i = 0; i < shows.length; i++) {
+        setStatus('🧩 بفحص الكروت في "' + esc(area) + '" (' + shows[i] + ')…');
+        var url = '/opportunities?show=' + shows[i] + '&areas=' + enc(area) + '&sort=newest';
+        var h = await fetch(url, { credentials: 'include' }).then(function (r) { return r.text(); });
+        var doc = new DOMParser().parseFromString(h, 'text/html');
+        var units = parseUnits(doc);
+        var parsedPaths = new Set(units.map(function (u) { return u.url.replace('https://aqarexit.com', ''); }));
+        var links = {}, order = [];
+        doc.querySelectorAll('a[href*="/buy/opportunity/"]').forEach(function (a) {
+          var path = a.getAttribute('href').split('?')[0].split('#')[0];
+          if (!links[path]) { links[path] = a; order.push(path); }
+        });
+        var codes = units.map(function (u) { return u.code; }), dup = codes.length - new Set(codes).size;
+        out.push('show=' + shows[i] + ': كل الـ article = ' + doc.querySelectorAll('article').length +
+          '، بالعلامة = ' + doc.querySelectorAll('article[data-analytics-unit]').length +
+          '، لينكات وحدات مختلفة = ' + order.length + '، اتقرت = ' + units.length + '، أكواد متكررة = ' + dup);
+        var miss = order.filter(function (p) { return !parsedPaths.has(p); });
+        out.push('لينكات ما اتقرتش: ' + miss.length + (miss.length ? ' — ' + miss.slice(0, 5).join(' ، ') : ''));
+        miss.slice(0, 2).forEach(function (p, k) {
+          var a = links[p], box = a.closest('article');
+          if (!box) {
+            // climb while the parent still holds only this unit's link(s)
+            box = a;
+            var onlyThis = function (el) { return [].every.call(el.querySelectorAll('a[href*="/buy/opportunity/"]'), function (x) { return x.getAttribute('href').split('?')[0].split('#')[0] === p; }); };
+            while (box.parentElement && box.parentElement !== doc.body && onlyThis(box.parentElement)) box = box.parentElement;
+          }
+          var pos = order.indexOf(p) + 1;
+          out.push('--- كارت ما اتقراش #' + (k + 1) + ' (ترتيبه ' + pos + ') ---');
+          out.push(box.outerHTML.replace(/\s(srcset|sizes|style)="[^"]*"/g, '').slice(0, 3500));
+        });
+        // units read but with a missing price (they count, but show "—")
+        var noPrice = units.filter(function (u) { return u.cash == null || u.remaining == null; });
+        out.push('اتقرت بس ناقصها كاش/متبقي: ' + noPrice.length + (noPrice.length ? ' — ' + noPrice.slice(0, 5).map(function (u) { return u.code; }).join('، ') : ''));
+        out.push('');
+        if (!miss.length && i === 0) continue;
       }
-      // B) sorts
-      out.push('', '[ترتيب]');
-      var sorts = ['cash_desc', 'price_desc', 'price_asc', 'total_desc', 'total_asc', 'installment_desc', 'delivery_desc', 'remaining_desc', 'remaining_asc', 'area_desc', 'area_asc', 'size_desc', 'oldest', 'ppm_asc', 'ppm_desc'];
-      for (var j = 0; j < sorts.length; j++) {
-        say('sort=' + sorts[j]);
-        var rs = await getPage(base + '&sort=' + sorts[j], PAGE);
-        var same = overlap(codesOf(rs), ref) === ref.length && codesOf(rs).join() === ref.join();
-        var m = ['cash', 'total', 'remaining', 'm2', 'ppm', 'delivery', 'inst'].map(function (k) { var d = monotonic(rs.units, k); return d ? k + ' ' + d : ''; }).filter(Boolean);
-        out.push((same ? '✗ ' : (m.length ? '✓ ' : '? ')) + 'sort=' + sorts[j] + (same ? ' — زي الأحدث (متجاهَل)' : ' — ' + (m.join('، ') || 'مختلف بس مش مرتب بحاجة معروفة')));
-      }
-      // C) min / range filters
-      out.push('', '[حد أدنى]');
-      var mc = median(r96.units.map(function (u) { return u.cash; })), mt = median(r96.units.map(function (u) { return u.total; })),
-        mm = median(r96.units.map(function (u) { return u.m2; })), mr = median(r96.units.map(function (u) { return u.remaining; }));
-      var mins = [['minCash', mc, 'cash', 1], ['cashMin', mc, 'cash', 1], ['minPrice', mt, 'total', 1], ['priceMin', mt, 'total', 1],
-        ['minTotal', mt, 'total', 1], ['minRemaining', mr, 'remaining', 1], ['minArea', mm, 'm2', 1], ['areaMin', mm, 'm2', 1],
-        ['minSize', mm, 'm2', 1], ['maxArea', mm, 'm2', -1], ['maxSize', mm, 'm2', -1], ['maxRemaining', mr, 'remaining', -1]];
-      for (var k = 0; k < mins.length; k++) {
-        var mi = mins[k]; if (mi[1] == null) continue;
-        say(mi[0]);
-        var rm = await getPage(base + '&' + mi[0] + '=' + Math.round(mi[1]), PAGE);
-        var good = rm.units.length && rm.units.every(function (u) { return u[mi[2]] == null || (mi[3] > 0 ? u[mi[2]] >= mi[1] : u[mi[2]] <= mi[1]); });
-        var ok2 = rm.count != null && rm.count < N && rm.count > 0 && good;
-        out.push((ok2 ? '✓ ' : '✗ ') + mi[0] + '=' + Math.round(mi[1]) + ' — العدد ' + rm.count + ' من ' + N + (good ? '' : ' (النتايج مش ملتزمة)'));
-      }
-      // D) beds exact or minimum?
-      out.push('', '[غرف]');
-      for (var b = 1; b <= 4; b++) {
-        say('beds=' + b);
-        var rb = await getPage(base + '&beds=' + b, PAGE), bs = {};
-        rb.units.forEach(function (u) { bs[u.beds] = (bs[u.beds] || 0) + 1; });
-        out.push('beds=' + b + ' — العدد ' + rb.count + ' — الغرف في النتايج: ' + JSON.stringify(bs));
-      }
-      // E) developer / compound filters
-      out.push('', '[مطور / كمبوند]');
-      var u0 = r96.units.filter(function (u) { return u.dev && u.name; })[0];
-      if (u0) {
-        var fl = [['developers', u0.dev, 'dev'], ['developer', u0.dev, 'dev'], ['dev', u0.dev, 'dev'], ['compounds', u0.name, 'name'],
-          ['compound', u0.name, 'name'], ['projects', u0.name, 'name'], ['project', u0.name, 'name']];
-        for (var q = 0; q < fl.length; q++) {
-          say(fl[q][0]);
-          var rf = await getPage(base + '&' + fl[q][0] + '=' + enc(fl[q][1]), PAGE);
-          var all = rf.units.length && rf.units.every(function (u) { return norm(u[fl[q][2]]) === norm(fl[q][1]); });
-          out.push((rf.count < N && all ? '✓ ' : '✗ ') + fl[q][0] + '=' + fl[q][1] + ' — العدد ' + rf.count);
-        }
-      }
-      out.push('', 'طلبات الاختبار: ' + (fetchCount - n0));
-      setStatus('🔬 الاختبار خلص — انسخ التقرير وابعته');
-      showText('نتيجة اختبار طرق الحصر. دوس "نسخ" وابعتهولي.', out.join('\n'));
+      setStatus('🧩 الفحص خلص — انسخ التقرير وابعته');
+      showText('فحص الكروت. دوس "نسخ" وابعتهولي.', out.join('\n'));
     } catch (e) {
-      setStatus('<span class="warn">الاختبار وقف: ' + esc(e.message) + '</span>');
-      if (out.length) showText('الاختبار وقف قبل ما يخلص — ده اللي اتجمع:', out.join('\n'));
+      setStatus('<span class="warn">الفحص وقف: ' + esc(e.message) + '</span>');
+      if (out.length) showText('الفحص وقف — ده اللي اتجمع:', out.join('\n'));
     } finally {
-      S.running = false; queue.length = 0;
+      S.running = false;
     }
   }
 
