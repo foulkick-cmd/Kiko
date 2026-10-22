@@ -83,6 +83,10 @@ public class MainActivity extends Activity implements PhoneLink.Listener {
     private Button dpiButton;
     private Button splitButton;
     private Button phoneButton;
+    private FrameLayout lockOverlay;
+    private TextView lockBadge;
+    private boolean locked;
+    private static final long UNLOCK_HOLD_MS = 3000;
     private Button systemButton;
     private Button favTabButton;
     private Button allTabButton;
@@ -352,6 +356,9 @@ public class MainActivity extends Activity implements PhoneLink.Listener {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (locked && keyCode == KeyEvent.KEYCODE_BACK) {
+            return true; // child lock: hardware Back does nothing either
+        }
         if (keyCode == KeyEvent.KEYCODE_BACK) {
             if (appsPanel.getVisibility() == View.VISIBLE) {
                 hideApps();
@@ -410,6 +417,7 @@ public class MainActivity extends Activity implements PhoneLink.Listener {
             tryConnect();
         }), barParams());
         bar.addView(barButton("Log", v -> toggleLog()), barParams());
+        bar.addView(barButton("Lock", v -> setLocked(true)), barParams());
 
         FrameLayout content = new FrameLayout(this);
         root.addView(content, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
@@ -447,10 +455,77 @@ public class MainActivity extends Activity implements PhoneLink.Listener {
         logScroll.addView(logView);
         content.addView(logScroll, new FrameLayout.LayoutParams(-1, -1));
 
-        setContentView(root);
+        FrameLayout top = new FrameLayout(this);
+        top.addView(root, new FrameLayout.LayoutParams(-1, -1));
+        top.addView(buildLockOverlay(), new FrameLayout.LayoutParams(-1, -1));
+        setContentView(top);
         applySplit();
         focus(rightPane);
         setStatus("Connect the phone by USB (USB debugging on)");
+    }
+
+    /**
+     * Child lock: a transparent layer over the whole app that swallows every touch.
+     * The phone apps keep running and stay visible. Unlock = hold the lock badge for 3 seconds.
+     */
+    private View buildLockOverlay() {
+        lockOverlay = new FrameLayout(this);
+        lockOverlay.setVisibility(View.GONE);
+        lockOverlay.setClickable(true);
+        lockOverlay.setOnTouchListener((v, e) -> true);
+
+        lockBadge = new TextView(this);
+        lockBadge.setText("🔒  Hold 3 s to unlock");
+        lockBadge.setTextColor(Color.WHITE);
+        lockBadge.setTextSize(14);
+        lockBadge.setPadding(dp(14), dp(10), dp(14), dp(10));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.argb(170, 0, 0, 0));
+        bg.setCornerRadius(dp(20));
+        lockBadge.setBackground(bg);
+        final Runnable unlock = () -> setLocked(false);
+        final Runnable[] tick = new Runnable[1];
+        final long[] downAt = new long[1];
+        tick[0] = () -> {
+            long left = UNLOCK_HOLD_MS - (System.currentTimeMillis() - downAt[0]);
+            if (left > 0) {
+                lockBadge.setText("🔓  Keep holding… " + ((left + 999) / 1000));
+                ui.postDelayed(tick[0], 200);
+            }
+        };
+        lockBadge.setOnTouchListener((v, e) -> {
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    downAt[0] = System.currentTimeMillis();
+                    ui.postDelayed(unlock, UNLOCK_HOLD_MS);
+                    ui.post(tick[0]);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    ui.removeCallbacks(unlock);
+                    ui.removeCallbacks(tick[0]);
+                    if (locked) {
+                        lockBadge.setText("🔒  Hold 3 s to unlock");
+                    }
+                    return true;
+                default:
+                    return true;
+            }
+        });
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
+        lp.setMargins(0, dp(10), dp(10), 0);
+        lockOverlay.addView(lockBadge, lp);
+        return lockOverlay;
+    }
+
+    private void setLocked(boolean on) {
+        locked = on;
+        if (on) {
+            hideApps();
+            logScroll.setVisibility(View.GONE);
+            lockBadge.setText("🔒  Hold 3 s to unlock");
+        }
+        lockOverlay.setVisibility(on ? View.VISIBLE : View.GONE);
     }
 
     private View buildDivider() {
