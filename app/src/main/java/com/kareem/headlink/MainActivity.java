@@ -1,6 +1,7 @@
 package com.kareem.headlink;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -16,6 +17,8 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -25,8 +28,11 @@ import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.BaseAdapter;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.GridView;
 import android.widget.LinearLayout;
@@ -39,6 +45,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 public class MainActivity extends Activity implements SurfaceHolder.Callback, ScrcpySession.Callback {
 
@@ -59,6 +66,11 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
     private AppAdapter adapter;
     private Button dpiButton;
     private Button systemButton;
+    private Button favTabButton;
+    private Button allTabButton;
+    private EditText searchBox;
+    private TextView emptyView;
+    private boolean favTab = true;
 
     private ScrcpySession session;
     private boolean permissionPending;
@@ -153,7 +165,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
             return true;
         }
         if (keyCode == KeyEvent.KEYCODE_BACK && appsPanel.getVisibility() == View.VISIBLE) {
-            appsPanel.setVisibility(View.GONE);
+            hideApps();
             return true;
         }
         return super.onKeyDown(keyCode, event);
@@ -224,15 +236,39 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         appsPanel.setBackgroundColor(Color.argb(240, 12, 18, 26));
         appsPanel.setPadding(dp(8), dp(8), dp(8), dp(8));
         appsPanel.setVisibility(View.GONE);
+        appsPanel.setClickable(true); // don't let taps fall through to the phone screen
 
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = new TextView(this);
-        title.setText("Phone apps");
-        title.setTextColor(Color.WHITE);
-        title.setTextSize(20);
-        header.addView(title, new LinearLayout.LayoutParams(0, -2, 1f));
+        favTabButton = smallButton("★ Favorites", v -> selectTab(true));
+        allTabButton = smallButton("All apps", v -> selectTab(false));
+        header.addView(favTabButton);
+        header.addView(allTabButton, tabGapParams());
+        searchBox = new EditText(this);
+        searchBox.setHint("Search apps");
+        searchBox.setSingleLine(true);
+        searchBox.setTextColor(Color.WHITE);
+        searchBox.setHintTextColor(Color.GRAY);
+        searchBox.setTextSize(16);
+        searchBox.setImeOptions(EditorInfo.IME_ACTION_DONE | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
+        searchBox.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence c, int a, int b, int d) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence c, int a, int b, int d) {
+            }
+
+            @Override
+            public void afterTextChanged(Editable e) {
+                refreshApps();
+            }
+        });
+        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(0, -2, 1f);
+        sp.setMargins(dp(12), 0, dp(12), 0);
+        header.addView(searchBox, sp);
         systemButton = smallButton(systemLabel(), v -> {
             showSystem = !showSystem;
             prefs.edit().putBoolean("showSystem", showSystem).apply();
@@ -240,8 +276,16 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
             refreshApps();
         });
         header.addView(systemButton);
-        header.addView(smallButton("Close", v -> appsPanel.setVisibility(View.GONE)));
+        header.addView(smallButton("Close", v -> hideApps()), tabGapParams());
         appsPanel.addView(header, new LinearLayout.LayoutParams(-1, -2));
+
+        emptyView = new TextView(this);
+        emptyView.setTextColor(Color.LTGRAY);
+        emptyView.setTextSize(16);
+        emptyView.setGravity(Gravity.CENTER);
+        emptyView.setPadding(dp(16), dp(24), dp(16), dp(8));
+        emptyView.setVisibility(View.GONE);
+        appsPanel.addView(emptyView, new LinearLayout.LayoutParams(-1, -2));
 
         GridView grid = new GridView(this);
         grid.setNumColumns(GridView.AUTO_FIT);
@@ -251,7 +295,11 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         grid.setStretchMode(GridView.STRETCH_COLUMN_WIDTH);
         adapter = new AppAdapter();
         grid.setAdapter(adapter);
-        grid.setOnItemClickListener((p, v, pos, id) -> launch(adapter.getItem(pos)));
+        grid.setOnItemClickListener((p, v, pos, id) -> launch(adapter.getItem(pos), false));
+        grid.setOnItemLongClickListener((p, v, pos, id) -> {
+            showAppMenu(adapter.getItem(pos));
+            return true;
+        });
         appsPanel.addView(grid, new LinearLayout.LayoutParams(-1, 0, 1f));
         content.addView(appsPanel, new FrameLayout.LayoutParams(-1, -1));
 
@@ -313,8 +361,44 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
     }
 
     private void toggleApps() {
-        appsPanel.setVisibility(appsPanel.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
+        if (appsPanel.getVisibility() == View.VISIBLE) {
+            hideApps();
+        } else {
+            showApps();
+        }
+    }
+
+    private void showApps() {
         logScroll.setVisibility(View.GONE);
+        appsPanel.setVisibility(View.VISIBLE);
+        refreshApps();
+    }
+
+    private void hideApps() {
+        appsPanel.setVisibility(View.GONE);
+        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (imm != null) {
+            imm.hideSoftInputFromWindow(searchBox.getWindowToken(), 0);
+        }
+        searchBox.clearFocus();
+    }
+
+    private LinearLayout.LayoutParams tabGapParams() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+        lp.setMargins(dp(6), 0, 0, 0);
+        return lp;
+    }
+
+    private void selectTab(boolean favorites) {
+        favTab = favorites;
+        refreshApps();
+    }
+
+    private void styleTab(Button b, boolean active) {
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(active ? Color.rgb(46, 140, 120) : Color.rgb(34, 52, 68));
+        bg.setCornerRadius(dp(10));
+        b.setBackground(bg);
     }
 
     private void toggleLog() {
@@ -358,36 +442,143 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
     // ------------------------------------------------------------------ apps
 
     private void refreshApps() {
-        List<String> recent = recentPackages();
-        List<AppEntry> recentApps = new ArrayList<>();
-        List<AppEntry> users = new ArrayList<>();
-        List<AppEntry> systems = new ArrayList<>();
-        for (String pkg : recent) {
+        if (adapter == null) {
+            return;
+        }
+        styleTab(favTabButton, favTab);
+        styleTab(allTabButton, !favTab);
+        String q = searchBox.getText().toString().trim().toLowerCase(Locale.ROOT);
+        List<AppEntry> items = new ArrayList<>();
+        int highlighted = 0;
+
+        if (!q.isEmpty()) {
+            // search covers every app (system included), whatever the tab
             for (AppEntry a : allApps) {
-                if (a.packageName.equals(pkg)) {
+                if (a.name.toLowerCase(Locale.ROOT).contains(q) || a.packageName.toLowerCase(Locale.ROOT).contains(q)) {
+                    items.add(a);
+                }
+            }
+            Collections.sort(items, (x, y) -> x.name.compareToIgnoreCase(y.name));
+        } else if (favTab) {
+            for (String pkg : favoritePackages()) {
+                AppEntry a = findApp(pkg);
+                if (a != null) {
+                    items.add(a);
+                }
+            }
+        } else {
+            List<AppEntry> recentApps = new ArrayList<>();
+            List<AppEntry> users = new ArrayList<>();
+            List<AppEntry> systems = new ArrayList<>();
+            for (String pkg : recentPackages()) {
+                AppEntry a = findApp(pkg);
+                if (a != null) {
                     recentApps.add(a);
-                    break;
                 }
             }
+            for (AppEntry a : allApps) {
+                if (recentApps.contains(a)) {
+                    continue;
+                }
+                if (a.system) {
+                    if (showSystem) {
+                        systems.add(a);
+                    }
+                } else {
+                    users.add(a);
+                }
+            }
+            Collections.sort(users, (x, y) -> x.name.compareToIgnoreCase(y.name));
+            Collections.sort(systems, (x, y) -> x.name.compareToIgnoreCase(y.name));
+            items.addAll(recentApps);
+            items.addAll(users);
+            items.addAll(systems);
+            highlighted = recentApps.size();
         }
+
+        if (allApps.isEmpty()) {
+            emptyView.setText(session == null ? "Not connected" : "Loading app list...");
+            emptyView.setVisibility(View.VISIBLE);
+        } else if (items.isEmpty()) {
+            emptyView.setText(!q.isEmpty() ? "No app matches \"" + q + "\""
+                    : "No favorites yet - long-press an app in \"All apps\" and choose Add to Favorites");
+            emptyView.setVisibility(View.VISIBLE);
+        } else {
+            emptyView.setVisibility(View.GONE);
+        }
+        adapter.setItems(items, highlighted);
+    }
+
+    private AppEntry findApp(String pkg) {
         for (AppEntry a : allApps) {
-            if (recentApps.contains(a)) {
-                continue;
-            }
-            if (a.system) {
-                if (showSystem) {
-                    systems.add(a);
-                }
-            } else {
-                users.add(a);
+            if (a.packageName.equals(pkg)) {
+                return a;
             }
         }
-        Collections.sort(users, (x, y) -> x.name.compareToIgnoreCase(y.name));
-        Collections.sort(systems, (x, y) -> x.name.compareToIgnoreCase(y.name));
-        List<AppEntry> items = new ArrayList<>(recentApps);
-        items.addAll(users);
-        items.addAll(systems);
-        adapter.setItems(items, recentApps.size());
+        return null;
+    }
+
+    private List<String> favoritePackages() {
+        List<String> out = new ArrayList<>();
+        for (String x : prefs.getString("favs", "").split(",")) {
+            if (!x.isEmpty()) {
+                out.add(x);
+            }
+        }
+        return out;
+    }
+
+    private boolean isFavorite(String pkg) {
+        return favoritePackages().contains(pkg);
+    }
+
+    private void setFavorite(String pkg, boolean fav) {
+        List<String> favs = favoritePackages();
+        favs.remove(pkg);
+        if (fav) {
+            favs.add(pkg);
+        }
+        prefs.edit().putString("favs", String.join(",", favs)).apply();
+        refreshApps();
+    }
+
+    /** First time the app list arrives: put Maps and YouTube Morphe in Favorites. */
+    private void seedFavoritesOnce() {
+        if (prefs.getBoolean("favSeeded", false) || allApps.isEmpty()) {
+            return;
+        }
+        List<String> favs = favoritePackages();
+        for (AppEntry a : allApps) {
+            String n = a.name.toLowerCase(Locale.ROOT);
+            boolean maps = a.packageName.equals("com.google.android.apps.maps")
+                    || n.equals("maps") || n.equals("google maps");
+            boolean morphe = n.contains("morphe");
+            if ((maps || morphe) && !favs.contains(a.packageName)) {
+                favs.add(a.packageName);
+            }
+        }
+        prefs.edit().putString("favs", String.join(",", favs)).putBoolean("favSeeded", true).apply();
+    }
+
+    private void showAppMenu(AppEntry app) {
+        if (app == null) {
+            return;
+        }
+        boolean fav = isFavorite(app.packageName);
+        String[] options = {
+                fav ? "Remove from Favorites" : "Add to Favorites",
+                "Force restart (use if it crashed or won't show)"
+        };
+        new AlertDialog.Builder(this)
+                .setTitle(app.name)
+                .setItems(options, (d, which) -> {
+                    if (which == 0) {
+                        setFavorite(app.packageName, !fav);
+                    } else {
+                        launch(app, true);
+                    }
+                })
+                .show();
     }
 
     private List<String> recentPackages() {
@@ -401,11 +592,12 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         return out;
     }
 
-    private void launch(AppEntry app) {
+    private void launch(AppEntry app, boolean forceRestart) {
         if (session == null || app == null) {
             return;
         }
-        session.startApp(app.packageName);
+        // "+" makes scrcpy force-stop the app first, so a crashed app relaunches on the head unit
+        session.startApp((forceRestart ? "+" : "") + app.packageName);
         appLaunched = true;
         List<String> recent = recentPackages();
         recent.remove(app.packageName);
@@ -414,8 +606,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
             recent.remove(recent.size() - 1);
         }
         prefs.edit().putString("recent", String.join(",", recent)).apply();
-        appsPanel.setVisibility(View.GONE);
-        refreshApps();
+        hideApps();
     }
 
     private final class AppAdapter extends BaseAdapter {
@@ -480,7 +671,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
                 circle.setStroke(dp(3), Color.rgb(255, 210, 80));
             }
             letter.setBackground(circle);
-            name.setText(a.name);
+            name.setText(isFavorite(a.packageName) ? "★ " + a.name : a.name);
             return tile;
         }
     }
@@ -628,6 +819,10 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         ui.post(() -> {
             allApps.clear();
             allApps.addAll(apps);
+            seedFavoritesOnce();
+            if (favoritePackages().isEmpty()) {
+                favTab = false;
+            }
             refreshApps();
         });
     }
@@ -637,7 +832,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         ui.post(() -> {
             setStatus(null);
             if (!appLaunched) {
-                appsPanel.setVisibility(View.VISIBLE);
+                showApps();
             }
         });
     }
