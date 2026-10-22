@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- any phone exposing an ADB interface (USB debugging on) -->
+    <usb-device class="255" subclass="66" protocol="1" />
+</resources>

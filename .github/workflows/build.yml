@@ -1,0 +1,49 @@
+name: Build HeadLink
+
+on:
+  push:
+    branches: [ HeadLink ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Fetch scrcpy-server v4.1 (checksum from scrcpy's install_release.sh)
+        run: |
+          mkdir -p app/src/main/assets
+          curl -fsSL -o app/src/main/assets/scrcpy-server.jar \
+            https://github.com/Genymobile/scrcpy/releases/download/v4.1/scrcpy-server-v4.1
+          echo "deacb991ed2509715160ffdc7907e47b4160eb30d1566217e9047fd5b8850cae  app/src/main/assets/scrcpy-server.jar" | sha256sum --check
+
+      - name: Build debug APK
+        run: gradle :app:assembleDebug --no-daemon
+
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk HeadLink.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HeadLink
+          path: HeadLink.apk
+
+      - name: Publish as release (easy download from the head unit)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: headlink-${{ github.run_number }}
+          name: HeadLink build ${{ github.run_number }}
+          files: HeadLink.apk

@@ -1,0 +1,45 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.kareem.headlink'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.kareem.headlink'
+        minSdk 29
+        targetSdk 34
+        versionCode 1
+        versionName '0.1.0'
+    }
+
+    // fixed key so every new build installs as an update over the previous one
+    signingConfigs {
+        fixed {
+            storeFile file('headlink.jks')
+            storePassword 'headlink123'
+            keyAlias 'headlink'
+            keyPassword 'headlink123'
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.fixed
+        }
+        release {
+            minifyEnabled false
+        }
+    }
+
+    // the server jar must be packaged as-is
+    androidResources {
+        noCompress 'jar'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
