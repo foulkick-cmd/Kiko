@@ -1,25 +1,25 @@
 # HeadLink
 
-تطبيق للشاشة (TS18) بيعرض تطبيقات الموبايل على **شاشة افتراضية منفصلة** بمقاس الشاشة — مش ميرور.
-مبني على scrcpy-server 4.1 (بيتحمّل وقت الـ build). مفيش حاجة بتتسطّب على الموبايل.
+Head-unit app (TS18) that runs phone apps on a **separate virtual display** sized to the head unit — not mirroring.
+Built on scrcpy-server 4.1 (downloaded at build time). Nothing is installed on the phone.
 
-## على الموبايل (مرة واحدة)
-1. Developer options ← **USB debugging** ✔
-2. Developer options ← **Disable permission monitoring** ✔ (ColorOS — من غيره اللمس ممكن ما يشتغلش)
+## Phone (once)
+1. Developer options → **USB debugging** on
+2. Developer options → **Disable permission monitoring** on (ColorOS — touch may not work without it)
 
-## على الشاشة
-1. نزّل `HeadLink.apk` من Releases وسطّبه.
-2. وصّل الموبايل بالـ USB وافتح HeadLink.
-3. اسمح بالوصول للـ USB، وعلى الموبايل اقبل USB debugging واختار **Always allow**.
-4. اختار التطبيق من «تطبيقات».
+## Head unit
+1. Install `HeadLink.apk` from Releases.
+2. Plug the phone in by USB and open HeadLink.
+3. Allow USB access; on the phone allow USB debugging with **Always allow**.
+4. Pick an app from **Apps**.
 
-## الأزرار
-- **رجوع**: Back للتطبيق المفتوح.
-- **تطبيقات**: قايمة تطبيقات الموبايل (آخر المستخدم عليه إطار أصفر).
-- **اتصال**: إعادة الاتصال.
-- **DPI**: حجم العناصر (160 → 320).
-- **سجل**: سجل السيرفر للتشخيص.
+## Side bar
+- **Back**: Back key for the running app
+- **Apps**: phone app list (recently used have a yellow ring)
+- **Connect**: reconnect
+- **DPI**: UI scale (160 → 320)
+- **Log**: server log for troubleshooting (opens automatically on errors)
 
-## مشاكل معروفة
-- لو ZLink مسك الـ USB: اقفل ZLink (Force stop) وجرّب «اتصال».
-- الصوت مش متنقل (لسه): خلّي صوت الموبايل على بلوتوث الشاشة.
+## Known issues
+- If ZLink grabs the USB connection: force-stop ZLink, then tap Connect.
+- Audio is not forwarded yet: keep phone audio on the head unit's Bluetooth.

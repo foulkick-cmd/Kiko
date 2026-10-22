@@ -76,7 +76,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
                 if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
                     tryConnect();
                 } else {
-                    setStatus("الإذن اترفض — اضغط اتصال وحاول تاني");
+                    setStatus("USB permission denied - tap Connect to retry");
                 }
             } else if (UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(action)) {
                 ui.postDelayed(MainActivity.this::tryConnect, 800);
@@ -84,7 +84,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
                 UsbDevice d = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
                 if (session != null && d != null && d.getDeviceName().equals(session.device.getDeviceName())) {
                     stopSession();
-                    setStatus("الموبايل اتفصل — وصّله تاني");
+                    setStatus("Phone disconnected - plug it in again");
                 }
             }
         }
@@ -187,19 +187,19 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         bar.setPadding(dp(4), dp(4), dp(4), dp(4));
         root.addView(bar, new LinearLayout.LayoutParams(dp(76), ViewGroup.LayoutParams.MATCH_PARENT));
 
-        bar.addView(barButton("رجوع", v -> {
+        bar.addView(barButton("Back", v -> {
             if (session != null) {
                 session.key(KeyEvent.KEYCODE_BACK);
             }
         }), barParams());
-        bar.addView(barButton("تطبيقات", v -> toggleApps()), barParams());
-        bar.addView(barButton("اتصال", v -> {
+        bar.addView(barButton("Apps", v -> toggleApps()), barParams());
+        bar.addView(barButton("Connect", v -> {
             stopSession();
             tryConnect();
         }), barParams());
         dpiButton = barButton("DPI\n" + currentDpi(), v -> cycleDpi());
         bar.addView(dpiButton, barParams());
-        bar.addView(barButton("سجل", v -> toggleLog()), barParams());
+        bar.addView(barButton("Log", v -> toggleLog()), barParams());
 
         // content area
         FrameLayout content = new FrameLayout(this);
@@ -229,7 +229,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = new TextView(this);
-        title.setText("تطبيقات الموبايل");
+        title.setText("Phone apps");
         title.setTextColor(Color.WHITE);
         title.setTextSize(20);
         header.addView(title, new LinearLayout.LayoutParams(0, -2, 1f));
@@ -240,7 +240,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
             refreshApps();
         });
         header.addView(systemButton);
-        header.addView(smallButton("إغلاق", v -> appsPanel.setVisibility(View.GONE)));
+        header.addView(smallButton("Close", v -> appsPanel.setVisibility(View.GONE)));
         appsPanel.addView(header, new LinearLayout.LayoutParams(-1, -2));
 
         GridView grid = new GridView(this);
@@ -269,7 +269,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         content.addView(logScroll, new FrameLayout.LayoutParams(-1, -1));
 
         setContentView(root);
-        setStatus("وصّل الموبايل بكابل USB (USB debugging مفعّل)");
+        setStatus("Connect the phone by USB (USB debugging on)");
     }
 
     private LinearLayout.LayoutParams barParams() {
@@ -300,7 +300,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
     }
 
     private String systemLabel() {
-        return showSystem ? "إخفاء تطبيقات النظام" : "إظهار تطبيقات النظام";
+        return showSystem ? "Hide system apps" : "Show system apps";
     }
 
     private void setStatus(String text) {
@@ -502,7 +502,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         }
         UsbDevice d = findPhone();
         if (d == null) {
-            setStatus("وصّل الموبايل بكابل USB وفعّل USB debugging\n(مش لاقي واجهة ADB على الـ USB)");
+            setStatus("Connect the phone by USB and enable USB debugging\n(no ADB interface found)");
             return;
         }
         if (!usb.hasPermission(d)) {
@@ -513,7 +513,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
                         | (Build.VERSION.SDK_INT >= 31 ? PendingIntent.FLAG_MUTABLE : 0);
                 usb.requestPermission(d, PendingIntent.getBroadcast(this, 0, i, flags));
             }
-            setStatus("اسمح لـ HeadLink بالوصول للموبايل (USB)");
+            setStatus("Allow HeadLink to access the phone (USB)");
             return;
         }
         int w = surfaceView.getWidth() & ~7;
@@ -612,7 +612,10 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
 
     @Override
     public void onStatus(String text) {
-        ui.post(() -> setStatus(text));
+        ui.post(() -> {
+            addLog("[status] " + text);
+            setStatus(text);
+        });
     }
 
     @Override
@@ -644,7 +647,9 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         ui.post(() -> {
             addLog("Ended: " + reason);
             session = null;
-            setStatus("انقطع الاتصال: " + reason + "\nاضغط «اتصال» للمحاولة تاني، أو «سجل» للتفاصيل");
+            logScroll.setVisibility(View.VISIBLE);
+            renderLog();
+            setStatus("Disconnected: " + reason + "\nTap Connect to retry, or Log for details");
         });
     }
 }

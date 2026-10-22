@@ -100,15 +100,15 @@ public final class AdbConnection implements Closeable {
                                      AuthListener listener, long timeoutMs) throws IOException {
         UsbInterface intf = findAdbInterface(device);
         if (intf == null) {
-            throw new IOException("الموبايل مش ظاهر كـ ADB — فعّل USB debugging");
+            throw new IOException("Phone has no ADB interface - enable USB debugging");
         }
         UsbDeviceConnection c = manager.openDevice(device);
         if (c == null) {
-            throw new IOException("مش قادر يفتح الـ USB (مفيش إذن؟)");
+            throw new IOException("Cannot open USB device (permission?)");
         }
         if (!c.claimInterface(intf, true)) {
             c.close();
-            throw new IOException("الـ USB محجوز من تطبيق تاني (ZLink؟)");
+            throw new IOException("USB interface is held by another app (ZLink?)");
         }
         AdbConnection adb = new AdbConnection(c, intf);
         try {
@@ -138,8 +138,8 @@ public final class AdbConnection implements Closeable {
             Message m = readMessage(deadline);
             if (m == null) {
                 throw new IOException(sentPublicKey
-                        ? "ما اتقبلش طلب USB debugging على الموبايل"
-                        : "الموبايل ما ردش على ADB");
+                        ? "USB debugging was not approved on the phone"
+                        : "Phone did not answer the ADB handshake");
             }
             if (m.cmd == A_CNXN) {
                 maxPayload = Math.max(1024, Math.min(m.arg1, MAX_DATA));
@@ -147,7 +147,7 @@ public final class AdbConnection implements Closeable {
                 return;
             }
             if (m.cmd == A_STLS) {
-                throw new IOException("الموبايل طالب TLS — مش مدعوم على USB");
+                throw new IOException("Phone requested TLS - not supported over USB");
             }
             if (m.cmd == A_AUTH && m.arg0 == AUTH_TOKEN) {
                 if (!sentSignature) {
@@ -334,27 +334,78 @@ public final class AdbConnection implements Closeable {
         streams.remove(localId);
     }
 
-    public String shell(String command, long timeoutMs) throws IOException {
-        AdbStream s = openStream("shell:" + command, timeoutMs);
+    public interface Log {
+        void log(String line);
+    }
+
+    /** Runs a shell command; idleTimeoutMs bounds the wait for each piece of output. */
+    public String shell(String command, long idleTimeoutMs) throws IOException {
+        AdbStream s = openStream("shell:" + command, 10_000);
         try {
+            s.setReadTimeout(idleTimeoutMs);
             return new String(s.readAll(), StandardCharsets.UTF_8);
         } finally {
             s.close();
         }
     }
 
+    /**
+     * Copies a file to the phone. Tries the sync protocol first; if that stalls or fails,
+     * falls back to base64 chunks carried inside shell OPEN packets (no WRTE needed).
+     * The final size is verified in both cases.
+     */
+    public void pushFile(byte[] content, String remotePath, Log log) throws IOException {
+        try {
+            log.log("push: sync protocol, " + content.length + " bytes");
+            pushSync(content, remotePath, 0100644, log);
+        } catch (IOException e) {
+            log.log("push: sync failed (" + e.getMessage() + "), using shell fallback");
+            pushViaShell(content, remotePath, log);
+        }
+        String size = shell("wc -c < " + remotePath, 10_000).trim();
+        log.log("push: remote size " + size);
+        if (!size.equals(String.valueOf(content.length))) {
+            throw new IOException("Server upload incomplete (phone has " + size + " of " + content.length + " bytes)");
+        }
+    }
+
+    private void pushViaShell(byte[] content, String remotePath, Log log) throws IOException {
+        String tmp = remotePath + ".part";
+        shell("rm -f " + tmp, 10_000);
+        final int rawChunk = 12 * 1024; // -> 16 KB of base64 per command
+        int parts = 0;
+        for (int off = 0; off < content.length; off += rawChunk) {
+            int n = Math.min(rawChunk, content.length - off);
+            String b64 = java.util.Base64.getEncoder().encodeToString(java.util.Arrays.copyOfRange(content, off, off + n));
+            String out = shell("echo " + b64 + " | base64 -d >> " + tmp + " && echo OK", 15_000);
+            if (!out.contains("OK")) {
+                throw new IOException("shell upload failed at byte " + off + ": " + out.trim());
+            }
+            parts++;
+        }
+        String out = shell("mv -f " + tmp + " " + remotePath + " && echo OK", 10_000);
+        if (!out.contains("OK")) {
+            throw new IOException("shell upload rename failed: " + out.trim());
+        }
+        log.log("push: shell fallback wrote " + parts + " parts");
+    }
+
     /** adb push using the sync protocol (v1). */
-    public void push(byte[] content, String remotePath, int mode) throws IOException {
+    private void pushSync(byte[] content, String remotePath, int mode, Log log) throws IOException {
         AdbStream s = openStream("sync:", 10_000);
         try {
+            s.setReadTimeout(15_000);
             byte[] pathMode = (remotePath + "," + mode).getBytes(StandardCharsets.UTF_8);
             s.write(syncPacket("SEND", pathMode.length, pathMode, 0, pathMode.length));
+            log.log("push: SEND accepted");
             final int chunk = 64 * 1024;
             for (int off = 0; off < content.length; off += chunk) {
                 int n = Math.min(chunk, content.length - off);
                 s.write(syncPacket("DATA", n, content, off, n));
+                log.log("push: DATA " + (off + n) + "/" + content.length);
             }
             s.write(syncPacket("DONE", (int) (System.currentTimeMillis() / 1000), null, 0, 0));
+            log.log("push: DONE sent, waiting for reply");
             byte[] resp = new byte[8];
             s.readFully(resp, 8);
             String id = new String(resp, 0, 4, StandardCharsets.US_ASCII);

@@ -29,6 +29,12 @@ public final class AdbStream implements Closeable {
 
     private byte[] cur;
     private int pos;
+    private volatile long readTimeoutMs; // 0 = wait forever
+
+    /** Applies to every later read; a read that waits longer throws an IOException. */
+    public void setReadTimeout(long ms) {
+        readTimeoutMs = ms;
+    }
 
     AdbStream(AdbConnection adb, int localId) {
         this.adb = adb;
@@ -80,7 +86,16 @@ public final class AdbStream implements Closeable {
         }
         if (cur == null || pos >= cur.length) {
             try {
-                cur = queue.take();
+                long t = readTimeoutMs;
+                if (t > 0) {
+                    byte[] next = queue.poll(t, TimeUnit.MILLISECONDS);
+                    if (next == null) {
+                        throw new IOException("read timeout (" + t + " ms)");
+                    }
+                    cur = next;
+                } else {
+                    cur = queue.take();
+                }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new InterruptedIOException("interrupted");
@@ -145,8 +160,8 @@ public final class AdbStream implements Closeable {
         while (len > 0) {
             int n = Math.min(len, max);
             try {
-                if (!writeCredits.tryAcquire(15, TimeUnit.SECONDS)) {
-                    throw new IOException("ADB write timeout");
+                if (!writeCredits.tryAcquire(8, TimeUnit.SECONDS)) {
+                    throw new IOException("phone did not acknowledge write (no OKAY in 8 s)");
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

@@ -97,17 +97,17 @@ final class ScrcpySession {
 
     private void run() {
         try {
-            cb.onStatus("جاري الاتصال بالموبايل…");
+            cb.onStatus("Connecting to phone...");
             AdbKey key = AdbKey.loadOrCreate(ctx.getFilesDir());
             adb = AdbConnection.open(usb, device, key,
-                    () -> cb.onStatus("على الموبايل: اقبل طلب USB debugging واختار Always allow"), 20_000);
+                    () -> cb.onStatus("On the phone: allow USB debugging (tick \"Always allow\")"), 20_000);
             if (!running) {
                 return;
             }
             cb.onLog("ADB: " + adb.getDeviceBanner());
 
-            cb.onStatus("جاري رفع السيرفر…");
-            adb.push(readAsset("scrcpy-server.jar"), SERVER_PATH, 0100644);
+            cb.onStatus("Uploading server...");
+            adb.pushFile(readAsset("scrcpy-server.jar"), SERVER_PATH, cb::onLog);
 
             loadAppsAsync();
 
@@ -122,7 +122,7 @@ final class ScrcpySession {
             server = adb.openStream("shell:" + cmd, 10_000);
             pumpLines(server.inputStream(), "server-log");
 
-            cb.onStatus("جاري تشغيل الشاشة الافتراضية…");
+            cb.onStatus("Starting virtual display...");
             String socket = String.format(Locale.US, "localabstract:scrcpy_%08x", scid);
             video = openWithRetry(socket);
             byte[] dummy = new byte[1];
@@ -138,12 +138,12 @@ final class ScrcpySession {
             int codecId = ByteBuffer.wrap(codec).getInt();
             if (codecId != CODEC_H264) {
                 throw new IOException(codecId == 0 || codecId == 1
-                        ? "السيرفر وقف الفيديو — افتح السجل"
-                        : String.format(Locale.US, "codec غير متوقع 0x%08x", codecId));
+                        ? "Server disabled the video - open Log"
+                        : String.format(Locale.US, "Unexpected codec 0x%08x", codecId));
             }
             decodeLoop();
             if (running) {
-                cb.onEnded("الموبايل قفل الاتصال");
+                cb.onEnded("Phone closed the connection");
             }
         } catch (Exception e) {
             if (running) {
@@ -206,14 +206,14 @@ final class ScrcpySession {
                 Thread.sleep(100);
             }
         }
-        throw new IOException("السيرفر ما فتحش — افتح السجل" + (last != null ? " (" + last.getMessage() + ")" : ""));
+        throw new IOException("Server did not start - open Log" + (last != null ? " (" + last.getMessage() + ")" : ""));
     }
 
     private void loadAppsAsync() {
         Thread t = new Thread(() -> {
             try {
                 String out = adb.shell("CLASSPATH=" + SERVER_PATH + " app_process / com.genymobile.scrcpy.Server "
-                        + SERVER_VERSION + " list_apps=true cleanup=false log_level=info", 10_000);
+                        + SERVER_VERSION + " list_apps=true cleanup=false log_level=info", 30_000);
                 List<AppEntry> apps = AppEntry.parse(out);
                 cb.onLog("Apps found: " + apps.size());
                 if (apps.isEmpty()) {
