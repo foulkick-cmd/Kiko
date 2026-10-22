@@ -33,17 +33,20 @@ jobs:
       - name: Build debug APK
         run: gradle :app:assembleDebug --no-daemon
 
-      - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk HeadLink.apk
+      - name: Rename APK with version
+        run: |
+          VER=$(grep -oP "versionName '\K[^']+" app/build.gradle)
+          echo "VER=$VER" >> "$GITHUB_ENV"
+          cp app/build/outputs/apk/debug/app-debug.apk "HeadLink-$VER.apk"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: HeadLink
-          path: HeadLink.apk
+          name: HeadLink-${{ env.VER }}
+          path: HeadLink-${{ env.VER }}.apk
 
       - name: Publish as release (easy download from the head unit)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: headlink-${{ github.run_number }}
-          name: HeadLink build ${{ github.run_number }}
-          files: HeadLink.apk
+          name: HeadLink ${{ env.VER }} (build ${{ github.run_number }})
+          files: HeadLink-${{ env.VER }}.apk
