@@ -177,7 +177,10 @@ public class MainActivity extends Activity implements PhoneLink.Listener {
             appLaunched = false;
             final ScrcpySession[] holder = new ScrcpySession[1];
             int bitRate = link.isWifi() ? 4_000_000 : 8_000_000; // phone hotspot is slower than USB
-            ScrcpySession s = new ScrcpySession(link.adb(), surface, surfW & ~7, surfH & ~7, dpi(), bitRate, tag,
+            // phone audio is global, so only the right pane (always present) carries it
+            boolean withAudio = Pane.this == rightPane;
+            ScrcpySession s = new ScrcpySession(link.adb(), surface, surfW & ~7, surfH & ~7, dpi(), bitRate,
+                    withAudio, tag,
                     new ScrcpySession.Callback() {
                         @Override
                         public void onLog(String line) {

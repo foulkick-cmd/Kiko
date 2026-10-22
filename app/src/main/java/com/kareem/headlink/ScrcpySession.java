@@ -39,12 +39,15 @@ final class ScrcpySession {
     private final int height;
     private final int dpi;
     private final int bitRate;
+    private final boolean withAudio;
     private final String tag;
     private final Callback cb;
 
     private volatile boolean running = true;
     private volatile AdbStream control;
     private volatile AdbStream video;
+    private volatile AdbStream audio;
+    private AudioPlayer audioPlayer;
     private volatile AdbStream server;
     private VideoDecoder decoder;
     private volatile int videoW;
@@ -53,8 +56,9 @@ final class ScrcpySession {
     private final ExecutorService controlExec = Executors.newSingleThreadExecutor();
 
     ScrcpySession(AdbConnection adb, Surface surface, int width, int height, int dpi, int bitRate,
-                  String tag, Callback cb) {
+                  boolean withAudio, String tag, Callback cb) {
         this.adb = adb;
+        this.withAudio = withAudio;
         this.bitRate = bitRate;
         this.surface = surface;
         this.width = width;
@@ -81,10 +85,17 @@ final class ScrcpySession {
 
     private void closeStreams() {
         AdbStream v = video;
+        AdbStream a = audio;
         AdbStream c = control;
         AdbStream s = server;
+        if (audioPlayer != null) {
+            audioPlayer.stop();
+        }
         if (v != null) {
             v.close();
+        }
+        if (a != null) {
+            a.close();
         }
         if (c != null) {
             c.close();
@@ -113,7 +124,8 @@ final class ScrcpySession {
             String cmd = "CLASSPATH=" + jar + " app_process / com.genymobile.scrcpy.Server "
                     + PhoneLink.SERVER_VERSION
                     + String.format(Locale.US, " scid=%08x", scid)
-                    + " log_level=info audio=false video_codec=h264 max_fps=30 video_bit_rate=" + bitRate
+                    + " log_level=info video_codec=h264 max_fps=30 video_bit_rate=" + bitRate
+                    + (withAudio ? " audio=true audio_codec=raw" : " audio=false")
                     + " tunnel_forward=true control=true cleanup=true clipboard_autosync=false"
                     + " keep_active=true display_ime_policy=local vd_system_decorations=false flex_display=true"
                     + String.format(Locale.US, " new_display=%dx%d/%d", width, height, dpi);
@@ -125,11 +137,19 @@ final class ScrcpySession {
             video = openWithRetry(socket);
             byte[] dummy = new byte[1];
             video.readFully(dummy, 1);
+            if (withAudio) {
+                // server accepts sockets in this order: video, audio, control
+                audio = openWithRetry(socket);
+            }
             control = openWithRetry(socket);
             drainInBackground(control);
 
             byte[] deviceName = new byte[64];
             video.readFully(deviceName, 64);
+            if (audio != null) {
+                audioPlayer = new AudioPlayer(audio, this::log);
+                audioPlayer.start();
+            }
             byte[] codec = new byte[4];
             video.readFully(codec, 4);
             int codecId = ByteBuffer.wrap(codec).getInt();
