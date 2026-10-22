@@ -17,6 +17,7 @@ final class PhoneLink {
 
     static final String SERVER_VERSION = "4.1"; // must match the scrcpy-server.jar fetched by the build
     static final String SERVER_PATH = "/data/local/tmp/headlink-server.jar";
+    static final int TCP_PORT = 5555;
 
     interface Listener {
         void onLinkStatus(String text);
@@ -28,20 +29,42 @@ final class PhoneLink {
         void onLinkApps(List<AppEntry> apps);
 
         void onLinkFailed(String reason);
+
+        /** USB link switched the phone to Wi-Fi ADB; adbd restarts, so the USB link must be reopened. */
+        void onLinkWifiEnabled();
     }
 
-    final UsbDevice device;
+    final UsbDevice device; // null for a Wi-Fi link
+    final String host;      // null for a USB link
+    private final boolean enableWifi;
     private final Context ctx;
     private final UsbManager usb;
     private final Listener listener;
     private volatile AdbConnection adb;
     private volatile boolean closed;
 
-    PhoneLink(Context ctx, UsbManager usb, UsbDevice device, Listener listener) {
+    /** USB link; if enableWifi, also switches the phone's adbd to TCP for later cable-free use. */
+    PhoneLink(Context ctx, UsbManager usb, UsbDevice device, boolean enableWifi, Listener listener) {
         this.ctx = ctx.getApplicationContext();
         this.usb = usb;
         this.device = device;
+        this.host = null;
+        this.enableWifi = enableWifi;
         this.listener = listener;
+    }
+
+    /** Wi-Fi link to a phone already in TCP mode. */
+    PhoneLink(Context ctx, String host, Listener listener) {
+        this.ctx = ctx.getApplicationContext();
+        this.usb = null;
+        this.device = null;
+        this.host = host;
+        this.enableWifi = false;
+        this.listener = listener;
+    }
+
+    boolean isWifi() {
+        return host != null;
     }
 
     AdbConnection adb() {
@@ -55,15 +78,35 @@ final class PhoneLink {
 
     private void run() {
         try {
-            listener.onLinkStatus("Connecting to phone...");
             AdbKey key = AdbKey.loadOrCreate(ctx.getFilesDir());
-            adb = AdbConnection.open(usb, device, key,
-                    () -> listener.onLinkStatus("On the phone: allow USB debugging (tick \"Always allow\")"), 20_000);
+            AdbConnection.AuthListener approve =
+                    () -> listener.onLinkStatus("On the phone: allow USB debugging (tick \"Always allow\")");
+            if (isWifi()) {
+                listener.onLinkStatus("Connecting over Wi-Fi to " + host + "...");
+                adb = AdbConnection.openTcp(host, TCP_PORT, key, approve, 20_000);
+            } else {
+                listener.onLinkStatus("Connecting to phone (USB)...");
+                adb = AdbConnection.open(usb, device, key, approve, 20_000);
+            }
             if (closed) {
                 adb.close();
                 return;
             }
-            listener.onLinkLog("ADB: " + adb.getDeviceBanner());
+            listener.onLinkLog("ADB" + (isWifi() ? " (Wi-Fi " + host + ")" : " (USB)") + ": " + adb.getDeviceBanner());
+
+            if (enableWifi) {
+                String port = adb.shell("getprop service.adb.tcp.port", 10_000).trim();
+                listener.onLinkLog("tcp port on phone: '" + port + "'");
+                if (!String.valueOf(TCP_PORT).equals(port)) {
+                    listener.onLinkStatus("Enabling Wi-Fi mode on the phone...");
+                    adb.enableTcpip(TCP_PORT);
+                    listener.onLinkLog("Wi-Fi ADB enabled on port " + TCP_PORT + " (phone adbd restarting)");
+                    closed = true;
+                    adb.close();
+                    listener.onLinkWifiEnabled();
+                    return;
+                }
+            }
             listener.onLinkStatus("Uploading server...");
             adb.pushFile(readAsset("scrcpy-server.jar"), SERVER_PATH, listener::onLinkLog);
             if (closed) {

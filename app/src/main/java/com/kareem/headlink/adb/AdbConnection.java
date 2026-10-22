@@ -1,9 +1,7 @@
 package com.kareem.headlink.adb;
 
-import android.hardware.usb.UsbConstants;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
-import android.hardware.usb.UsbEndpoint;
 import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbManager;
 
@@ -19,7 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Minimal ADB host over USB (the head unit is the USB host, the phone runs adbd).
+ * Minimal ADB host over USB or TCP (the phone runs adbd).
  * Implements CNXN/AUTH handshake, stream multiplexing, shell and sync push.
  */
 public final class AdbConnection implements Closeable {
@@ -42,12 +40,8 @@ public final class AdbConnection implements Closeable {
 
     private static final int VERSION = 0x01000001;
     private static final int MAX_DATA = 256 * 1024;
-    private static final int USB_CHUNK = 16384;
 
-    private final UsbDeviceConnection conn;
-    private final UsbInterface intf;
-    private final UsbEndpoint epIn;
-    private final UsbEndpoint epOut;
+    private final AdbTransport transport;
     private final Object writeLock = new Object();
     private final Map<Integer, AdbStream> streams = new ConcurrentHashMap<>();
     private final AtomicInteger nextId = new AtomicInteger(1);
@@ -73,27 +67,8 @@ public final class AdbConnection implements Closeable {
         return null;
     }
 
-    private AdbConnection(UsbDeviceConnection conn, UsbInterface intf) throws IOException {
-        this.conn = conn;
-        this.intf = intf;
-        UsbEndpoint in = null;
-        UsbEndpoint out = null;
-        for (int i = 0; i < intf.getEndpointCount(); i++) {
-            UsbEndpoint e = intf.getEndpoint(i);
-            if (e.getType() != UsbConstants.USB_ENDPOINT_XFER_BULK) {
-                continue;
-            }
-            if (e.getDirection() == UsbConstants.USB_DIR_IN) {
-                in = e;
-            } else {
-                out = e;
-            }
-        }
-        if (in == null || out == null) {
-            throw new IOException("ADB bulk endpoints not found");
-        }
-        epIn = in;
-        epOut = out;
+    private AdbConnection(AdbTransport transport) {
+        this.transport = transport;
     }
 
     public static AdbConnection open(UsbManager manager, UsbDevice device, AdbKey key,
@@ -110,7 +85,13 @@ public final class AdbConnection implements Closeable {
             c.close();
             throw new IOException("USB interface is held by another app (ZLink?)");
         }
-        AdbConnection adb = new AdbConnection(c, intf);
+        AdbConnection adb;
+        try {
+            adb = new AdbConnection(new UsbTransport(c, intf));
+        } catch (IOException e) {
+            c.close();
+            throw e;
+        }
         try {
             adb.handshake(key, listener, timeoutMs);
         } catch (IOException e) {
@@ -119,6 +100,33 @@ public final class AdbConnection implements Closeable {
         }
         adb.startReader();
         return adb;
+    }
+
+    /** Connects to a phone whose adbd listens on TCP (enabled earlier over USB with tcpip). */
+    public static AdbConnection openTcp(String host, int port, AdbKey key,
+                                        AuthListener listener, long timeoutMs) throws IOException {
+        AdbConnection adb = new AdbConnection(new TcpTransport(host, port, 3000));
+        try {
+            adb.handshake(key, listener, timeoutMs);
+        } catch (IOException e) {
+            adb.close();
+            throw e;
+        }
+        adb.startReader();
+        return adb;
+    }
+
+    /** Switches the phone's adbd to TCP mode on the given port. adbd restarts, so this link drops. */
+    public void enableTcpip(int port) throws IOException {
+        AdbStream s = openStream("tcpip:" + port, 10_000);
+        try {
+            s.setReadTimeout(5000);
+            s.readAll();
+        } catch (IOException ignored) {
+            // adbd restarts immediately and may cut the reply
+        } finally {
+            s.close();
+        }
     }
 
     public String getDeviceBanner() {
@@ -246,35 +254,10 @@ public final class AdbConnection implements Closeable {
     }
 
     private boolean readExact(byte[] dst, int len, long deadline) throws IOException {
-        int off = 0;
-        while (off < len) {
-            if (closed) {
-                throw new IOException("closed");
-            }
-            int want = Math.min(len - off, USB_CHUNK);
-            int timeout = 0;
-            if (deadline != 0) {
-                long left = deadline - System.currentTimeMillis();
-                if (left <= 0) {
-                    if (off == 0) {
-                        return false;
-                    }
-                    throw new IOException("USB read timeout");
-                }
-                timeout = (int) Math.min(1000, left);
-            }
-            int n = conn.bulkTransfer(epIn, dst, off, want, timeout);
-            if (n > 0) {
-                off += n;
-            } else if (n < 0) {
-                if (deadline == 0) {
-                    throw new IOException("USB disconnected");
-                }
-                // timeout slice elapsed; loop re-checks the deadline
-            }
-            // n == 0: zero-length packet, keep reading
+        if (closed) {
+            throw new IOException("closed");
         }
-        return true;
+        return transport.readExact(dst, len, deadline);
     }
 
     // ---------------------------------------------------------------- writer
@@ -288,28 +271,10 @@ public final class AdbConnection implements Closeable {
         ByteBuffer b = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN);
         b.putInt(cmd).putInt(arg0).putInt(arg1).putInt(len).putInt(sum).putInt(~cmd);
         synchronized (writeLock) {
-            writeUsb(b.array(), 24);
-            if (len > 0) {
-                writeUsb(data, len);
-                int mps = epOut.getMaxPacketSize();
-                if (mps > 0 && len % mps == 0) {
-                    conn.bulkTransfer(epOut, new byte[0], 0, 0, 1000); // zero-length packet
-                }
-            }
-        }
-    }
-
-    private void writeUsb(byte[] buf, int len) throws IOException {
-        int off = 0;
-        while (off < len) {
             if (closed) {
                 throw new IOException("closed");
             }
-            int n = conn.bulkTransfer(epOut, buf, off, Math.min(USB_CHUNK, len - off), 5000);
-            if (n < 0) {
-                throw new IOException("USB write failed");
-            }
-            off += n;
+            transport.writeMessage(b.array(), data, len);
         }
     }
 
@@ -447,11 +412,6 @@ public final class AdbConnection implements Closeable {
             s.onRemoteClose();
         }
         streams.clear();
-        try {
-            conn.releaseInterface(intf);
-        } catch (RuntimeException ignored) {
-            // device gone
-        }
-        conn.close();
+        transport.close();
     }
 }

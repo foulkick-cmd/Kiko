@@ -38,6 +38,7 @@ final class ScrcpySession {
     private final int width;
     private final int height;
     private final int dpi;
+    private final int bitRate;
     private final String tag;
     private final Callback cb;
 
@@ -51,8 +52,10 @@ final class ScrcpySession {
     private Thread worker;
     private final ExecutorService controlExec = Executors.newSingleThreadExecutor();
 
-    ScrcpySession(AdbConnection adb, Surface surface, int width, int height, int dpi, String tag, Callback cb) {
+    ScrcpySession(AdbConnection adb, Surface surface, int width, int height, int dpi, int bitRate,
+                  String tag, Callback cb) {
         this.adb = adb;
+        this.bitRate = bitRate;
         this.surface = surface;
         this.width = width;
         this.height = height;
@@ -110,7 +113,7 @@ final class ScrcpySession {
             String cmd = "CLASSPATH=" + jar + " app_process / com.genymobile.scrcpy.Server "
                     + PhoneLink.SERVER_VERSION
                     + String.format(Locale.US, " scid=%08x", scid)
-                    + " log_level=info audio=false video_codec=h264 max_fps=30 video_bit_rate=8000000"
+                    + " log_level=info audio=false video_codec=h264 max_fps=30 video_bit_rate=" + bitRate
                     + " tunnel_forward=true control=true cleanup=true clipboard_autosync=false"
                     + " keep_active=true display_ime_policy=local vd_system_decorations=false flex_display=true"
                     + String.format(Locale.US, " new_display=%dx%d/%d", width, height, dpi);

@@ -13,6 +13,11 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbManager;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.NetworkRequest;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -89,6 +94,8 @@ public class MainActivity extends Activity implements PhoneLink.Listener {
     private PhoneLink link;
     private boolean linkReady;
     private boolean permissionPending;
+    private String wifiEnabledForUsb; // USB device that already got "tcpip" during this plug-in
+    private ConnectivityManager.NetworkCallback wifiCallback;
     private final List<AppEntry> allApps = new ArrayList<>();
     private final ArrayDeque<String> logLines = new ArrayDeque<>();
 
@@ -107,9 +114,14 @@ public class MainActivity extends Activity implements PhoneLink.Listener {
                 ui.postDelayed(MainActivity.this::tryConnect, 800);
             } else if (UsbManager.ACTION_USB_DEVICE_DETACHED.equals(action)) {
                 UsbDevice d = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
-                if (link != null && d != null && d.getDeviceName().equals(link.device.getDeviceName())) {
+                if (d != null && d.getDeviceName().equals(wifiEnabledForUsb)) {
+                    wifiEnabledForUsb = null;
+                }
+                if (link != null && link.device != null && d != null
+                        && d.getDeviceName().equals(link.device.getDeviceName())) {
                     closeLink();
-                    setStatus("Phone disconnected - plug it in again");
+                    setStatus("Cable unplugged - switching to Wi-Fi...");
+                    ui.postDelayed(MainActivity.this::tryConnect, 3000);
                 }
             }
         }
@@ -164,7 +176,8 @@ public class MainActivity extends Activity implements PhoneLink.Listener {
             }
             appLaunched = false;
             final ScrcpySession[] holder = new ScrcpySession[1];
-            ScrcpySession s = new ScrcpySession(link.adb(), surface, surfW & ~7, surfH & ~7, dpi(), tag,
+            int bitRate = link.isWifi() ? 4_000_000 : 8_000_000; // phone hotspot is slower than USB
+            ScrcpySession s = new ScrcpySession(link.adb(), surface, surfW & ~7, surfH & ~7, dpi(), bitRate, tag,
                     new ScrcpySession.Callback() {
                         @Override
                         public void onLog(String line) {
@@ -260,7 +273,28 @@ public class MainActivity extends Activity implements PhoneLink.Listener {
         } else {
             registerReceiver(usbReceiver, f);
         }
+        registerWifiCallback();
         ui.postDelayed(this::tryConnect, 500);
+    }
+
+    /** When the head unit joins a Wi-Fi network (the phone hotspot), try to connect. */
+    private void registerWifiCallback() {
+        ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (cm == null) {
+            return;
+        }
+        wifiCallback = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(Network network) {
+                ui.postDelayed(MainActivity.this::tryConnect, 2500);
+            }
+        };
+        try {
+            cm.registerNetworkCallback(new NetworkRequest.Builder()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(), wifiCallback);
+        } catch (RuntimeException e) {
+            wifiCallback = null;
+        }
     }
 
     @Override
@@ -288,6 +322,15 @@ public class MainActivity extends Activity implements PhoneLink.Listener {
     @Override
     protected void onDestroy() {
         closeLink();
+        ui.removeCallbacksAndMessages(null);
+        if (wifiCallback != null) {
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            try {
+                cm.unregisterNetworkCallback(wifiCallback);
+            } catch (RuntimeException ignored) {
+                // not registered
+            }
+        }
         try {
             unregisterReceiver(usbReceiver);
         } catch (IllegalArgumentException ignored) {
@@ -968,7 +1011,7 @@ public class MainActivity extends Activity implements PhoneLink.Listener {
         }
         UsbDevice d = findPhone();
         if (d == null) {
-            setStatus("Connect the phone by USB and enable USB debugging\n(no ADB interface found)");
+            connectWifi();
             return;
         }
         if (!usb.hasPermission(d)) {
@@ -983,8 +1026,39 @@ public class MainActivity extends Activity implements PhoneLink.Listener {
             return;
         }
         logLines.clear();
-        link = new PhoneLink(this, usb, d, this);
+        boolean enableWifi = !d.getDeviceName().equals(wifiEnabledForUsb);
+        link = new PhoneLink(this, usb, d, enableWifi, this);
         link.start();
+    }
+
+    /** No cable: connect to the phone over its hotspot (the hotspot gateway is the phone). */
+    private void connectWifi() {
+        String host = wifiGateway();
+        String last = prefs.getString("lastHost", "");
+        if (host == null && last.isEmpty()) {
+            setStatus("Plug the phone in by USB once (after every phone restart),\n"
+                    + "then turn on the phone hotspot and connect the head unit to it.");
+            return;
+        }
+        if (host == null) {
+            host = last;
+        }
+        addLog("Trying Wi-Fi " + host + ":" + PhoneLink.TCP_PORT);
+        link = new PhoneLink(this, host, this);
+        link.start();
+    }
+
+    @SuppressWarnings("deprecation")
+    private String wifiGateway() {
+        WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        if (wm == null || !wm.isWifiEnabled() || wm.getDhcpInfo() == null) {
+            return null;
+        }
+        int g = wm.getDhcpInfo().gateway; // little-endian IPv4
+        if (g == 0) {
+            return null;
+        }
+        return (g & 0xFF) + "." + ((g >> 8) & 0xFF) + "." + ((g >> 16) & 0xFF) + "." + ((g >> 24) & 0xFF);
     }
 
     private void closeLink() {
@@ -1050,6 +1124,9 @@ public class MainActivity extends Activity implements PhoneLink.Listener {
                 return;
             }
             linkReady = true;
+            if (link.isWifi()) {
+                prefs.edit().putString("lastHost", link.host).apply();
+            }
             setStatus("Starting screens...");
             leftPane.start();
             rightPane.start();
@@ -1073,10 +1150,30 @@ public class MainActivity extends Activity implements PhoneLink.Listener {
     public void onLinkFailed(String reason) {
         ui.post(() -> {
             addLog("Link failed: " + reason);
+            boolean wifi = link != null && link.isWifi();
             closeLink();
+            if (wifi) {
+                setStatus("Waiting for the phone over Wi-Fi...\n"
+                        + "Phone hotspot on + head unit connected to it.\n"
+                        + "After a phone restart, plug the USB cable in once.");
+                ui.postDelayed(this::tryConnect, 8000);
+                return;
+            }
             logScroll.setVisibility(View.VISIBLE);
             renderLog();
             setStatus("Disconnected: " + reason + "\nTap Connect to retry, or Log for details");
+        });
+    }
+
+    @Override
+    public void onLinkWifiEnabled() {
+        ui.post(() -> {
+            if (link != null && link.device != null) {
+                wifiEnabledForUsb = link.device.getDeviceName();
+            }
+            closeLink();
+            setStatus("Wi-Fi mode is on. Reconnecting...\nYou can unplug the cable any time.");
+            ui.postDelayed(this::tryConnect, 3000);
         });
     }
 
