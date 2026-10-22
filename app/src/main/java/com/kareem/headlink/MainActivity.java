@@ -238,18 +238,26 @@ public class MainActivity extends Activity implements PhoneLink.Listener {
 
         @Override
         public void surfaceChanged(SurfaceHolder h, int format, int w, int hh) {
+            boolean sizeChanged = w != surfW || hh != surfH;
             surfW = w;
             surfH = hh;
+            surface = h.getSurface();
             if (session == null) {
                 start();
-            } else if (!dragging) {
+                return;
+            }
+            session.attachSurface(surface); // no-op if already rendering to this surface
+            if (sizeChanged && !dragging) {
                 resizeToView();
             }
         }
 
         @Override
         public void surfaceDestroyed(SurfaceHolder h) {
-            stop();
+            // keep the phone session (and audio) running while HeadLink is in the background
+            if (session != null) {
+                session.detachSurface();
+            }
             surface = null;
         }
     }
@@ -642,6 +650,9 @@ public class MainActivity extends Activity implements PhoneLink.Listener {
     private void toggleSplit() {
         split = !split;
         prefs.edit().putBoolean("split", split).apply();
+        if (!split) {
+            leftPane.stop(); // hidden pane must not keep a session (and the phone encoder) busy
+        }
         applySplit();
         // the left SurfaceView is created/destroyed with its visibility, which starts/stops its session;
         // the right pane keeps running and gets a resize when its surface size changes

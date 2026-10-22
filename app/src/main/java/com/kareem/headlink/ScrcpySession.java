@@ -34,7 +34,7 @@ final class ScrcpySession {
     }
 
     private final AdbConnection adb;
-    private final Surface surface;
+    private Surface surface; // guarded by decoderLock; null while the pane is hidden
     private final int width;
     private final int height;
     private final int dpi;
@@ -49,7 +49,8 @@ final class ScrcpySession {
     private volatile AdbStream audio;
     private AudioPlayer audioPlayer;
     private volatile AdbStream server;
-    private VideoDecoder decoder;
+    private VideoDecoder decoder; // guarded by decoderLock
+    private final Object decoderLock = new Object();
     private volatile int videoW;
     private volatile int videoH;
     private Thread worker;
@@ -169,9 +170,11 @@ final class ScrcpySession {
             }
         } finally {
             running = false;
-            if (decoder != null) {
-                decoder.release();
-                decoder = null;
+            synchronized (decoderLock) {
+                if (decoder != null) {
+                    decoder.release();
+                    decoder = null;
+                }
             }
             controlExec.shutdownNow();
             closeStreams();
@@ -188,13 +191,20 @@ final class ScrcpySession {
                 h.getInt();
                 int w = h.getInt();
                 int hh = h.getInt();
-                if (decoder == null || w != videoW || hh != videoH) {
-                    if (decoder != null) {
+                boolean created = false;
+                synchronized (decoderLock) {
+                    if (decoder != null && (w != videoW || hh != videoH)) {
                         decoder.release();
+                        decoder = null;
                     }
                     videoW = w;
                     videoH = hh;
-                    decoder = new VideoDecoder(surface, w, hh);
+                    if (decoder == null && surface != null) {
+                        decoder = new VideoDecoder(surface, w, hh);
+                        created = true;
+                    }
+                }
+                if (created) {
                     log("video " + w + "x" + hh);
                     cb.onStarted(w, hh);
                 }
@@ -207,13 +217,13 @@ final class ScrcpySession {
             }
             byte[] pkt = new byte[size];
             video.readFully(pkt, size);
-            if (decoder == null) {
-                continue;
-            }
             boolean config = (ptsFlags & (1L << 62)) != 0;
             long pts = config ? 0 : (ptsFlags & ((1L << 61) - 1));
-            if (!decoder.feed(pkt, pts, config)) {
-                log("decoder skipped a packet of " + size + " bytes");
+            synchronized (decoderLock) {
+                // while hidden there is no decoder: packets are dropped, the phone app keeps running
+                if (decoder != null && !decoder.feed(pkt, pts, config)) {
+                    log("decoder skipped a packet of " + size + " bytes");
+                }
             }
         }
     }
@@ -312,6 +322,32 @@ final class ScrcpySession {
         b.put((byte) n.length);
         b.put(n);
         sendControl(b.array());
+    }
+
+    /** Pane hidden (HeadLink in background): stop rendering, keep the phone session alive. */
+    void detachSurface() {
+        synchronized (decoderLock) {
+            if (decoder != null) {
+                decoder.release();
+                decoder = null;
+            }
+            surface = null;
+        }
+    }
+
+    /** Pane visible again: render to the new surface; RESET_VIDEO makes the phone send a fresh keyframe. */
+    void attachSurface(Surface s) {
+        synchronized (decoderLock) {
+            if (s == surface && decoder != null) {
+                return;
+            }
+            if (decoder != null) {
+                decoder.release();
+                decoder = null;
+            }
+            surface = s;
+        }
+        sendControl(new byte[]{17}); // TYPE_RESET_VIDEO -> new session packet + config + keyframe
     }
 
     /** Turns the phone's own panel off/on; the phone stays awake so apps keep running here. */
