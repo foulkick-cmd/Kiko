@@ -1,128 +1,123 @@
 package com.kareem.headlink;
 
-import android.content.Context;
-import android.hardware.usb.UsbDevice;
-import android.hardware.usb.UsbManager;
 import android.view.Surface;
 
 import com.kareem.headlink.adb.AdbConnection;
-import com.kareem.headlink.adb.AdbKey;
 import com.kareem.headlink.adb.AdbStream;
 
 import java.io.BufferedReader;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
-import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
 /**
- * Runs scrcpy-server on the phone with a NEW virtual display sized to the head unit,
- * decodes its video and forwards touches. Nothing is installed on the phone.
+ * One scrcpy-server instance on the phone with its own resizable ("flex") virtual display,
+ * decoded into one pane of the head unit. Several sessions can share one ADB link.
  */
 final class ScrcpySession {
 
-    static final String SERVER_VERSION = "4.1"; // must match the scrcpy-server.jar fetched by the build
-    private static final String SERVER_PATH = "/data/local/tmp/headlink-server.jar";
     private static final int CODEC_H264 = 0x68323634; // "h264"
 
     interface Callback {
-        void onStatus(String text);
-
         void onLog(String line);
-
-        void onApps(List<AppEntry> apps);
 
         void onStarted(int width, int height);
 
         void onEnded(String reason);
     }
 
-    private final Context ctx;
-    private final UsbManager usb;
-    final UsbDevice device;
+    private final AdbConnection adb;
     private final Surface surface;
     private final int width;
     private final int height;
     private final int dpi;
+    private final String tag;
     private final Callback cb;
 
     private volatile boolean running = true;
-    private volatile AdbConnection adb;
     private volatile AdbStream control;
-    private AdbStream video;
-    private AdbStream server;
+    private volatile AdbStream video;
+    private volatile AdbStream server;
     private VideoDecoder decoder;
     private volatile int videoW;
     private volatile int videoH;
     private Thread worker;
     private final ExecutorService controlExec = Executors.newSingleThreadExecutor();
 
-    ScrcpySession(Context ctx, UsbManager usb, UsbDevice device, Surface surface,
-                  int width, int height, int dpi, Callback cb) {
-        this.ctx = ctx.getApplicationContext();
-        this.usb = usb;
-        this.device = device;
+    ScrcpySession(AdbConnection adb, Surface surface, int width, int height, int dpi, String tag, Callback cb) {
+        this.adb = adb;
         this.surface = surface;
         this.width = width;
         this.height = height;
         this.dpi = dpi;
+        this.tag = tag;
         this.cb = cb;
     }
 
     void start() {
-        worker = new Thread(this::run, "scrcpy-session");
+        worker = new Thread(this::run, "scrcpy-" + tag);
         worker.start();
     }
 
+    /** Non-blocking stop; the phone-side server exits when its sockets close. */
     void stop() {
         running = false;
-        AdbConnection a = adb;
-        if (a != null) {
-            a.close(); // unblocks every pending read
-        }
         controlExec.shutdownNow();
         if (worker != null) {
             worker.interrupt();
         }
+        new Thread(this::closeStreams, "stop-" + tag).start();
+    }
+
+    private void closeStreams() {
+        AdbStream v = video;
+        AdbStream c = control;
+        AdbStream s = server;
+        if (v != null) {
+            v.close();
+        }
+        if (c != null) {
+            c.close();
+        }
+        if (s != null) {
+            s.close();
+        }
+    }
+
+    private void log(String line) {
+        cb.onLog("[" + tag + "] " + line);
     }
 
     // ------------------------------------------------------------------ main
 
     private void run() {
         try {
-            cb.onStatus("Connecting to phone...");
-            AdbKey key = AdbKey.loadOrCreate(ctx.getFilesDir());
-            adb = AdbConnection.open(usb, device, key,
-                    () -> cb.onStatus("On the phone: allow USB debugging (tick \"Always allow\")"), 20_000);
-            if (!running) {
-                return;
-            }
-            cb.onLog("ADB: " + adb.getDeviceBanner());
-
-            cb.onStatus("Uploading server...");
-            adb.pushFile(readAsset("scrcpy-server.jar"), SERVER_PATH, cb::onLog);
-
-            loadAppsAsync();
-
             int scid = new SecureRandom().nextInt() & 0x7FFFFFFF;
-            String cmd = "CLASSPATH=" + SERVER_PATH + " app_process / com.genymobile.scrcpy.Server " + SERVER_VERSION
+            // each session runs its own copy: cleanup=true deletes the jar it started from,
+            // and restores the phone screen power when the session ends
+            String jar = "/data/local/tmp/headlink-" + tag + ".jar";
+            String cp = adb.shell("cp " + PhoneLink.SERVER_PATH + " " + jar + " && echo OK", 10_000);
+            if (!cp.contains("OK")) {
+                throw new IOException("could not copy server: " + cp.trim());
+            }
+            String cmd = "CLASSPATH=" + jar + " app_process / com.genymobile.scrcpy.Server "
+                    + PhoneLink.SERVER_VERSION
                     + String.format(Locale.US, " scid=%08x", scid)
                     + " log_level=info audio=false video_codec=h264 max_fps=30 video_bit_rate=8000000"
-                    + " tunnel_forward=true control=true cleanup=false clipboard_autosync=false"
-                    + " keep_active=true display_ime_policy=local"
+                    + " tunnel_forward=true control=true cleanup=true clipboard_autosync=false"
+                    + " keep_active=true display_ime_policy=local vd_system_decorations=false flex_display=true"
                     + String.format(Locale.US, " new_display=%dx%d/%d", width, height, dpi);
-            cb.onLog("$ " + cmd);
+            log("start " + width + "x" + height + " @" + dpi + "dpi");
             server = adb.openStream("shell:" + cmd, 10_000);
-            pumpLines(server.inputStream(), "server-log");
+            pumpLines(server.inputStream());
 
-            cb.onStatus("Starting virtual display...");
             String socket = String.format(Locale.US, "localabstract:scrcpy_%08x", scid);
             video = openWithRetry(socket);
             byte[] dummy = new byte[1];
@@ -132,7 +127,6 @@ final class ScrcpySession {
 
             byte[] deviceName = new byte[64];
             video.readFully(deviceName, 64);
-            cb.onLog("Device: " + new String(deviceName, StandardCharsets.UTF_8).trim());
             byte[] codec = new byte[4];
             video.readFully(codec, 4);
             int codecId = ByteBuffer.wrap(codec).getInt();
@@ -152,7 +146,12 @@ final class ScrcpySession {
             }
         } finally {
             running = false;
-            cleanup();
+            if (decoder != null) {
+                decoder.release();
+                decoder = null;
+            }
+            controlExec.shutdownNow();
+            closeStreams();
         }
     }
 
@@ -162,7 +161,7 @@ final class ScrcpySession {
             video.readFully(hdr, 12);
             ByteBuffer h = ByteBuffer.wrap(hdr);
             if ((hdr[0] & 0x80) != 0) {
-                // session packet: flags(4) width(4) height(4)
+                // session packet: flags(4) width(4) height(4) - sent again after every resize
                 h.getInt();
                 int w = h.getInt();
                 int hh = h.getInt();
@@ -173,7 +172,7 @@ final class ScrcpySession {
                     videoW = w;
                     videoH = hh;
                     decoder = new VideoDecoder(surface, w, hh);
-                    cb.onLog("Video session " + w + "x" + hh);
+                    log("video " + w + "x" + hh);
                     cb.onStarted(w, hh);
                 }
                 continue;
@@ -191,7 +190,7 @@ final class ScrcpySession {
             boolean config = (ptsFlags & (1L << 62)) != 0;
             long pts = config ? 0 : (ptsFlags & ((1L << 61) - 1));
             if (!decoder.feed(pkt, pts, config)) {
-                cb.onLog("decoder skipped a packet of " + size + " bytes");
+                log("decoder skipped a packet of " + size + " bytes");
             }
         }
     }
@@ -209,36 +208,17 @@ final class ScrcpySession {
         throw new IOException("Server did not start - open Log" + (last != null ? " (" + last.getMessage() + ")" : ""));
     }
 
-    private void loadAppsAsync() {
-        Thread t = new Thread(() -> {
-            try {
-                String out = adb.shell("CLASSPATH=" + SERVER_PATH + " app_process / com.genymobile.scrcpy.Server "
-                        + SERVER_VERSION + " list_apps=true cleanup=false log_level=info", 30_000);
-                List<AppEntry> apps = AppEntry.parse(out);
-                cb.onLog("Apps found: " + apps.size());
-                if (apps.isEmpty()) {
-                    cb.onLog(out);
-                }
-                cb.onApps(apps);
-            } catch (IOException e) {
-                cb.onLog("App list failed: " + e.getMessage());
-            }
-        }, "list-apps");
-        t.setDaemon(true);
-        t.start();
-    }
-
-    private void pumpLines(InputStream in, String name) {
+    private void pumpLines(InputStream in) {
         Thread t = new Thread(() -> {
             try (BufferedReader r = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = r.readLine()) != null) {
-                    cb.onLog(line);
+                    log(line);
                 }
             } catch (IOException ignored) {
                 // stream ended
             }
-        }, name);
+        }, "log-" + tag);
         t.setDaemon(true);
         t.start();
     }
@@ -253,33 +233,9 @@ final class ScrcpySession {
             } catch (IOException ignored) {
                 // closed
             }
-        }, "control-in");
+        }, "ctl-in-" + tag);
         t.setDaemon(true);
         t.start();
-    }
-
-    private byte[] readAsset(String name) throws IOException {
-        try (InputStream in = ctx.getAssets().open(name)) {
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buf = new byte[16384];
-            int n;
-            while ((n = in.read(buf)) > 0) {
-                out.write(buf, 0, n);
-            }
-            return out.toByteArray();
-        }
-    }
-
-    private void cleanup() {
-        if (decoder != null) {
-            decoder.release();
-            decoder = null;
-        }
-        AdbConnection a = adb;
-        if (a != null) {
-            a.close();
-        }
-        controlExec.shutdownNow();
     }
 
     // ------------------------------------------------------------------ control
@@ -322,15 +278,32 @@ final class ScrcpySession {
         }
     }
 
-    void startApp(String packageName) {
-        byte[] name = packageName.getBytes(StandardCharsets.UTF_8);
-        if (name.length > 255) {
+    /** "+package" force-stops the app first. */
+    void startApp(String name) {
+        byte[] n = name.getBytes(StandardCharsets.UTF_8);
+        if (n.length > 255) {
             return;
         }
-        ByteBuffer b = ByteBuffer.allocate(2 + name.length);
+        ByteBuffer b = ByteBuffer.allocate(2 + n.length);
         b.put((byte) 16);                     // TYPE_START_APP
-        b.put((byte) name.length);
-        b.put(name);
+        b.put((byte) n.length);
+        b.put(n);
+        sendControl(b.array());
+    }
+
+    /** Turns the phone's own panel off/on; the phone stays awake so apps keep running here. */
+    void setPhoneScreen(boolean on) {
+        sendControl(new byte[]{10, (byte) (on ? 1 : 0)}); // TYPE_SET_DISPLAY_POWER
+    }
+
+    /** Resizes the flex virtual display; the server answers with a new video session. */
+    void resize(int w, int h) {
+        if (w <= 0 || h <= 0 || w > 0xFFFF || h > 0xFFFF) {
+            return;
+        }
+        ByteBuffer b = ByteBuffer.allocate(5);
+        b.put((byte) 21);                     // TYPE_RESIZE_DISPLAY
+        b.putShort((short) w).putShort((short) h);
         sendControl(b.array());
     }
 
@@ -350,7 +323,7 @@ final class ScrcpySession {
                     // session is ending
                 }
             });
-        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+        } catch (RejectedExecutionException ignored) {
             // stopped
         }
     }

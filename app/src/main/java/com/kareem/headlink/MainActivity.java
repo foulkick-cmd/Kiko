@@ -47,35 +47,48 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 
-public class MainActivity extends Activity implements SurfaceHolder.Callback, ScrcpySession.Callback {
+public class MainActivity extends Activity implements PhoneLink.Listener {
 
     private static final String ACTION_USB_PERMISSION = "com.kareem.headlink.USB_PERMISSION";
+    private static final String MAPS_PKG = "com.google.android.apps.maps";
     private static final int[] DPI_STEPS = {160, 200, 240, 280, 320};
-    private static final int MAX_LOG_LINES = 400;
+    private static final int MAX_LOG_LINES = 500;
+    private static final float MIN_RATIO = 0.2f;
+    private static final float MAX_RATIO = 0.8f;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private UsbManager usb;
     private SharedPreferences prefs;
 
-    private SurfaceView surfaceView;
-    private Surface surface;
+    private LinearLayout panesRow;
+    private Pane leftPane;
+    private Pane rightPane;
+    private View divider;
+    private Pane focused;
+    private boolean split;
+    private float ratio; // width share of the LEFT pane
+    private boolean dragging;
+
     private TextView statusView;
     private ScrollView logScroll;
     private TextView logView;
     private LinearLayout appsPanel;
+    private TextView targetLabel;
     private AppAdapter adapter;
     private Button dpiButton;
+    private Button splitButton;
+    private Button phoneButton;
     private Button systemButton;
     private Button favTabButton;
     private Button allTabButton;
     private EditText searchBox;
     private TextView emptyView;
     private boolean favTab = true;
-
-    private ScrcpySession session;
-    private boolean permissionPending;
-    private boolean appLaunched;
     private boolean showSystem;
+
+    private PhoneLink link;
+    private boolean linkReady;
+    private boolean permissionPending;
     private final List<AppEntry> allApps = new ArrayList<>();
     private final ArrayDeque<String> logLines = new ArrayDeque<>();
 
@@ -94,15 +107,138 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
                 ui.postDelayed(MainActivity.this::tryConnect, 800);
             } else if (UsbManager.ACTION_USB_DEVICE_DETACHED.equals(action)) {
                 UsbDevice d = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
-                if (session != null && d != null && d.getDeviceName().equals(session.device.getDeviceName())) {
-                    stopSession();
+                if (link != null && d != null && d.getDeviceName().equals(link.device.getDeviceName())) {
+                    closeLink();
                     setStatus("Phone disconnected - plug it in again");
                 }
             }
         }
     };
 
-    // ------------------------------------------------------------------ lifecycle
+    // ================================================================== pane
+
+    /** One screen area showing one virtual display of the phone. */
+    private final class Pane implements SurfaceHolder.Callback {
+        final String id;
+        final String tag;
+        final FrameLayout frame;
+        final SurfaceView view;
+        Surface surface;
+        ScrcpySession session;
+        int surfW;
+        int surfH;
+        boolean appLaunched;
+
+        Pane(String id, String tag) {
+            this.id = id;
+            this.tag = tag;
+            frame = new FrameLayout(MainActivity.this);
+            frame.setPadding(dp(2), dp(2), dp(2), dp(2));
+            view = new SurfaceView(MainActivity.this);
+            view.getHolder().addCallback(this);
+            view.setOnTouchListener((v, e) -> {
+                if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                    focus(this);
+                }
+                return onVideoTouch(this, e);
+            });
+            frame.addView(view, new FrameLayout.LayoutParams(-1, -1));
+        }
+
+        int dpi() {
+            return prefs.getInt("dpi_" + id, "right".equals(id) ? 160 : 240);
+        }
+
+        void setDpi(int dpi) {
+            prefs.edit().putInt("dpi_" + id, dpi).apply();
+        }
+
+        String lastApp() {
+            return prefs.getString("app_" + id, "right".equals(id) ? MAPS_PKG : "");
+        }
+
+        void start() {
+            if (session != null || surface == null || !linkReady || link == null || link.adb() == null
+                    || surfW <= 0 || surfH <= 0 || frame.getVisibility() != View.VISIBLE) {
+                return;
+            }
+            appLaunched = false;
+            final ScrcpySession[] holder = new ScrcpySession[1];
+            ScrcpySession s = new ScrcpySession(link.adb(), surface, surfW & ~7, surfH & ~7, dpi(), tag,
+                    new ScrcpySession.Callback() {
+                        @Override
+                        public void onLog(String line) {
+                            ui.post(() -> addLog(line));
+                        }
+
+                        @Override
+                        public void onStarted(int w, int h) {
+                            ui.post(() -> paneStarted(Pane.this, holder[0]));
+                        }
+
+                        @Override
+                        public void onEnded(String reason) {
+                            ui.post(() -> paneEnded(Pane.this, holder[0], reason));
+                        }
+                    });
+            holder[0] = s;
+            session = s;
+            s.start();
+        }
+
+        void stop() {
+            ScrcpySession s = session;
+            session = null;
+            if (s != null) {
+                s.stop();
+            }
+        }
+
+        void restart() {
+            stop();
+            start();
+        }
+
+        void launch(String pkg, boolean force) {
+            if (session == null) {
+                return;
+            }
+            // "+" makes scrcpy force-stop the app first, so a crashed app relaunches here
+            session.startApp((force ? "+" : "") + pkg);
+            appLaunched = true;
+            prefs.edit().putString("app_" + id, pkg).apply();
+        }
+
+        void resizeToView() {
+            if (session != null && surfW > 0 && surfH > 0) {
+                session.resize(surfW & ~7, surfH & ~7);
+            }
+        }
+
+        @Override
+        public void surfaceCreated(SurfaceHolder h) {
+            surface = h.getSurface();
+        }
+
+        @Override
+        public void surfaceChanged(SurfaceHolder h, int format, int w, int hh) {
+            surfW = w;
+            surfH = hh;
+            if (session == null) {
+                start();
+            } else if (!dragging) {
+                resizeToView();
+            }
+        }
+
+        @Override
+        public void surfaceDestroyed(SurfaceHolder h) {
+            stop();
+            surface = null;
+        }
+    }
+
+    // ================================================================== lifecycle
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -111,6 +247,8 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         usb = (UsbManager) getSystemService(Context.USB_SERVICE);
         prefs = getSharedPreferences("headlink", MODE_PRIVATE);
         showSystem = prefs.getBoolean("showSystem", false);
+        split = prefs.getBoolean("split", true);
+        ratio = prefs.getFloat("ratio", 0.5f);
         buildUi();
 
         IntentFilter f = new IntentFilter();
@@ -122,6 +260,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         } else {
             registerReceiver(usbReceiver, f);
         }
+        ui.postDelayed(this::tryConnect, 500);
     }
 
     @Override
@@ -148,7 +287,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
 
     @Override
     protected void onDestroy() {
-        stopSession();
+        closeLink();
         try {
             unregisterReceiver(usbReceiver);
         } catch (IllegalArgumentException ignored) {
@@ -159,14 +298,15 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
-        // hardware BACK on the head unit goes to the phone app while mirroring
-        if (keyCode == KeyEvent.KEYCODE_BACK && session != null && appsPanel.getVisibility() != View.VISIBLE) {
-            session.key(KeyEvent.KEYCODE_BACK);
-            return true;
-        }
-        if (keyCode == KeyEvent.KEYCODE_BACK && appsPanel.getVisibility() == View.VISIBLE) {
-            hideApps();
-            return true;
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            if (appsPanel.getVisibility() == View.VISIBLE) {
+                hideApps();
+                return true;
+            }
+            if (focused != null && focused.session != null) {
+                focused.session.key(KeyEvent.KEYCODE_BACK);
+                return true;
+            }
         }
         return super.onKeyDown(keyCode, event);
     }
@@ -181,7 +321,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
                         | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
     }
 
-    // ------------------------------------------------------------------ UI
+    // ================================================================== UI
 
     private int dp(float v) {
         return Math.round(v * getResources().getDisplayMetrics().density);
@@ -192,7 +332,6 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         root.setOrientation(LinearLayout.HORIZONTAL);
         root.setBackgroundColor(Color.BLACK);
 
-        // side bar
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.VERTICAL);
         bar.setBackgroundColor(Color.rgb(16, 24, 32));
@@ -200,27 +339,37 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         root.addView(bar, new LinearLayout.LayoutParams(dp(76), ViewGroup.LayoutParams.MATCH_PARENT));
 
         bar.addView(barButton("Back", v -> {
-            if (session != null) {
-                session.key(KeyEvent.KEYCODE_BACK);
+            if (focused != null && focused.session != null) {
+                focused.session.key(KeyEvent.KEYCODE_BACK);
             }
         }), barParams());
         bar.addView(barButton("Apps", v -> toggleApps()), barParams());
+        splitButton = barButton("", v -> toggleSplit());
+        bar.addView(splitButton, barParams());
+        dpiButton = barButton("", v -> cycleDpi());
+        bar.addView(dpiButton, barParams());
+        phoneButton = barButton("", v -> togglePhoneScreen());
+        bar.addView(phoneButton, barParams());
+        updatePhoneLabel();
         bar.addView(barButton("Connect", v -> {
-            stopSession();
+            closeLink();
             tryConnect();
         }), barParams());
-        dpiButton = barButton("DPI\n" + currentDpi(), v -> cycleDpi());
-        bar.addView(dpiButton, barParams());
         bar.addView(barButton("Log", v -> toggleLog()), barParams());
 
-        // content area
         FrameLayout content = new FrameLayout(this);
         root.addView(content, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
 
-        surfaceView = new SurfaceView(this);
-        surfaceView.getHolder().addCallback(this);
-        surfaceView.setOnTouchListener((v, e) -> onVideoTouch(e));
-        content.addView(surfaceView, new FrameLayout.LayoutParams(-1, -1));
+        // two panes with a draggable divider; Maps defaults to the right pane
+        panesRow = new LinearLayout(this);
+        panesRow.setOrientation(LinearLayout.HORIZONTAL);
+        leftPane = new Pane("left", "L");
+        rightPane = new Pane("right", "R");
+        divider = buildDivider();
+        panesRow.addView(leftPane.frame, new LinearLayout.LayoutParams(0, -1, ratio));
+        panesRow.addView(divider, new LinearLayout.LayoutParams(dp(18), -1));
+        panesRow.addView(rightPane.frame, new LinearLayout.LayoutParams(0, -1, 1f - ratio));
+        content.addView(panesRow, new FrameLayout.LayoutParams(-1, -1));
 
         statusView = new TextView(this);
         statusView.setTextColor(Color.WHITE);
@@ -230,13 +379,73 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         statusView.setBackgroundColor(Color.argb(200, 0, 0, 0));
         content.addView(statusView, new FrameLayout.LayoutParams(-1, -1));
 
-        // apps panel
+        buildAppsPanel(content);
+
+        logScroll = new ScrollView(this);
+        logScroll.setBackgroundColor(Color.argb(230, 0, 0, 0));
+        logScroll.setVisibility(View.GONE);
+        logView = new TextView(this);
+        logView.setTextColor(Color.rgb(140, 255, 160));
+        logView.setTypeface(Typeface.MONOSPACE);
+        logView.setTextSize(11);
+        logView.setTextIsSelectable(true);
+        logView.setPadding(dp(8), dp(8), dp(8), dp(8));
+        logScroll.addView(logView);
+        content.addView(logScroll, new FrameLayout.LayoutParams(-1, -1));
+
+        setContentView(root);
+        applySplit();
+        focus(rightPane);
+        setStatus("Connect the phone by USB (USB debugging on)");
+    }
+
+    private View buildDivider() {
+        FrameLayout d = new FrameLayout(this);
+        d.setBackgroundColor(Color.rgb(20, 30, 40));
+        View grip = new View(this);
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(Color.rgb(120, 150, 170));
+        g.setCornerRadius(dp(3));
+        grip.setBackground(g);
+        FrameLayout.LayoutParams gp = new FrameLayout.LayoutParams(dp(6), dp(64), Gravity.CENTER);
+        d.addView(grip, gp);
+        d.setOnTouchListener((v, e) -> {
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    dragging = true;
+                    return true;
+                case MotionEvent.ACTION_MOVE: {
+                    int[] loc = new int[2];
+                    panesRow.getLocationOnScreen(loc);
+                    float x = e.getRawX() - loc[0];
+                    ratio = Math.max(MIN_RATIO, Math.min(MAX_RATIO, x / Math.max(1, panesRow.getWidth())));
+                    applySplit();
+                    return true;
+                }
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    dragging = false;
+                    prefs.edit().putFloat("ratio", ratio).apply();
+                    // let the new layout settle, then resize both virtual displays to their panes
+                    ui.postDelayed(() -> {
+                        leftPane.resizeToView();
+                        rightPane.resizeToView();
+                    }, 150);
+                    return true;
+                default:
+                    return true;
+            }
+        });
+        return d;
+    }
+
+    private void buildAppsPanel(FrameLayout content) {
         appsPanel = new LinearLayout(this);
         appsPanel.setOrientation(LinearLayout.VERTICAL);
         appsPanel.setBackgroundColor(Color.argb(240, 12, 18, 26));
         appsPanel.setPadding(dp(8), dp(8), dp(8), dp(8));
         appsPanel.setVisibility(View.GONE);
-        appsPanel.setClickable(true); // don't let taps fall through to the phone screen
+        appsPanel.setClickable(true); // taps must not fall through to the phone screens
 
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
@@ -244,7 +453,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         favTabButton = smallButton("★ Favorites", v -> selectTab(true));
         allTabButton = smallButton("All apps", v -> selectTab(false));
         header.addView(favTabButton);
-        header.addView(allTabButton, tabGapParams());
+        header.addView(allTabButton, gapParams());
         searchBox = new EditText(this);
         searchBox.setHint("Search apps");
         searchBox.setSingleLine(true);
@@ -276,8 +485,14 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
             refreshApps();
         });
         header.addView(systemButton);
-        header.addView(smallButton("Close", v -> hideApps()), tabGapParams());
+        header.addView(smallButton("Close", v -> hideApps()), gapParams());
         appsPanel.addView(header, new LinearLayout.LayoutParams(-1, -2));
+
+        targetLabel = new TextView(this);
+        targetLabel.setTextColor(Color.rgb(120, 220, 200));
+        targetLabel.setTextSize(14);
+        targetLabel.setPadding(dp(4), dp(6), dp(4), dp(2));
+        appsPanel.addView(targetLabel, new LinearLayout.LayoutParams(-1, -2));
 
         emptyView = new TextView(this);
         emptyView.setTextColor(Color.LTGRAY);
@@ -302,27 +517,17 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         });
         appsPanel.addView(grid, new LinearLayout.LayoutParams(-1, 0, 1f));
         content.addView(appsPanel, new FrameLayout.LayoutParams(-1, -1));
-
-        // log overlay
-        logScroll = new ScrollView(this);
-        logScroll.setBackgroundColor(Color.argb(230, 0, 0, 0));
-        logScroll.setVisibility(View.GONE);
-        logView = new TextView(this);
-        logView.setTextColor(Color.rgb(140, 255, 160));
-        logView.setTypeface(Typeface.MONOSPACE);
-        logView.setTextSize(11);
-        logView.setTextIsSelectable(true);
-        logView.setPadding(dp(8), dp(8), dp(8), dp(8));
-        logScroll.addView(logView);
-        content.addView(logScroll, new FrameLayout.LayoutParams(-1, -1));
-
-        setContentView(root);
-        setStatus("Connect the phone by USB (USB debugging on)");
     }
 
     private LinearLayout.LayoutParams barParams() {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, 0, 1f);
         lp.setMargins(0, dp(3), 0, dp(3));
+        return lp;
+    }
+
+    private LinearLayout.LayoutParams gapParams() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+        lp.setMargins(dp(6), 0, 0, 0);
         return lp;
     }
 
@@ -332,10 +537,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         b.setAllCaps(false);
         b.setTextSize(13);
         b.setTextColor(Color.WHITE);
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(Color.rgb(34, 52, 68));
-        bg.setCornerRadius(dp(10));
-        b.setBackground(bg);
+        styleButton(b, false);
         b.setPadding(0, 0, 0, 0);
         b.setOnClickListener(l);
         return b;
@@ -345,6 +547,13 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         Button b = barButton(text, l);
         b.setPadding(dp(14), dp(6), dp(14), dp(6));
         return b;
+    }
+
+    private void styleButton(Button b, boolean active) {
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(active ? Color.rgb(46, 140, 120) : Color.rgb(34, 52, 68));
+        bg.setCornerRadius(dp(10));
+        b.setBackground(bg);
     }
 
     private String systemLabel() {
@@ -360,6 +569,103 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         }
     }
 
+    // ================================================================== split / focus / dpi
+
+    private void applySplit() {
+        LinearLayout.LayoutParams lpL = (LinearLayout.LayoutParams) leftPane.frame.getLayoutParams();
+        LinearLayout.LayoutParams lpR = (LinearLayout.LayoutParams) rightPane.frame.getLayoutParams();
+        if (split) {
+            leftPane.frame.setVisibility(View.VISIBLE);
+            divider.setVisibility(View.VISIBLE);
+            lpL.weight = ratio;
+            lpR.weight = 1f - ratio;
+        } else {
+            leftPane.frame.setVisibility(View.GONE);
+            divider.setVisibility(View.GONE);
+            lpR.weight = 1f;
+            if (focused == leftPane) {
+                focus(rightPane);
+            }
+        }
+        leftPane.frame.setLayoutParams(lpL);
+        rightPane.frame.setLayoutParams(lpR);
+        splitButton.setText(split ? "Split\nON" : "Split\nOFF");
+        styleButton(splitButton, split);
+    }
+
+    private void toggleSplit() {
+        split = !split;
+        prefs.edit().putBoolean("split", split).apply();
+        applySplit();
+        // the left SurfaceView is created/destroyed with its visibility, which starts/stops its session;
+        // the right pane keeps running and gets a resize when its surface size changes
+    }
+
+    private void focus(Pane p) {
+        focused = p;
+        leftPane.frame.setBackgroundColor(p == leftPane && split ? Color.rgb(46, 140, 120) : Color.BLACK);
+        rightPane.frame.setBackgroundColor(p == rightPane && split ? Color.rgb(46, 140, 120) : Color.BLACK);
+        updateDpiLabel();
+    }
+
+    private String paneName(Pane p) {
+        if (!split) {
+            return "";
+        }
+        return p == leftPane ? "L " : "R ";
+    }
+
+    private void updateDpiLabel() {
+        if (dpiButton != null && focused != null) {
+            dpiButton.setText("DPI\n" + paneName(focused) + focused.dpi());
+        }
+    }
+
+    private void cycleDpi() {
+        Pane p = focused;
+        if (p == null) {
+            return;
+        }
+        int cur = p.dpi();
+        int next = DPI_STEPS[0];
+        for (int i = 0; i < DPI_STEPS.length; i++) {
+            if (DPI_STEPS[i] == cur) {
+                next = DPI_STEPS[(i + 1) % DPI_STEPS.length];
+                break;
+            }
+        }
+        p.setDpi(next);
+        updateDpiLabel();
+        if (p.session != null) {
+            p.restart(); // DPI is fixed per virtual display; its last app reopens automatically
+        }
+    }
+
+    private boolean phoneScreenOff() {
+        return prefs.getBoolean("phoneScreenOff", true);
+    }
+
+    private void updatePhoneLabel() {
+        phoneButton.setText(phoneScreenOff() ? "Phone\nscreen OFF" : "Phone\nscreen ON");
+        styleButton(phoneButton, phoneScreenOff());
+    }
+
+    private void togglePhoneScreen() {
+        boolean off = !phoneScreenOff();
+        prefs.edit().putBoolean("phoneScreenOff", off).apply();
+        updatePhoneLabel();
+        applyPhoneScreen();
+    }
+
+    /** The right pane is always present, so it owns the phone-screen setting. */
+    private void applyPhoneScreen() {
+        if (rightPane.session != null) {
+            rightPane.session.setPhoneScreen(!phoneScreenOff());
+        }
+    }
+
+    // ================================================================== panels
+
     private void toggleApps() {
         if (appsPanel.getVisibility() == View.VISIBLE) {
             hideApps();
@@ -371,6 +677,9 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
     private void showApps() {
         logScroll.setVisibility(View.GONE);
         appsPanel.setVisibility(View.VISIBLE);
+        targetLabel.setText(split
+                ? "Opens on the " + (focused == leftPane ? "LEFT" : "RIGHT") + " screen (tap a screen first to choose)"
+                : "Opens on the screen");
         refreshApps();
     }
 
@@ -383,22 +692,9 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         searchBox.clearFocus();
     }
 
-    private LinearLayout.LayoutParams tabGapParams() {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
-        lp.setMargins(dp(6), 0, 0, 0);
-        return lp;
-    }
-
     private void selectTab(boolean favorites) {
         favTab = favorites;
         refreshApps();
-    }
-
-    private void styleTab(Button b, boolean active) {
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(active ? Color.rgb(46, 140, 120) : Color.rgb(34, 52, 68));
-        bg.setCornerRadius(dp(10));
-        b.setBackground(bg);
     }
 
     private void toggleLog() {
@@ -418,41 +714,29 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         logScroll.post(() -> logScroll.fullScroll(View.FOCUS_DOWN));
     }
 
-    private int currentDpi() {
-        return prefs.getInt("dpi", 240);
-    }
-
-    private void cycleDpi() {
-        int cur = currentDpi();
-        int next = DPI_STEPS[0];
-        for (int i = 0; i < DPI_STEPS.length; i++) {
-            if (DPI_STEPS[i] == cur) {
-                next = DPI_STEPS[(i + 1) % DPI_STEPS.length];
-                break;
-            }
+    private void addLog(String line) {
+        logLines.addLast(line);
+        while (logLines.size() > MAX_LOG_LINES) {
+            logLines.removeFirst();
         }
-        prefs.edit().putInt("dpi", next).apply();
-        dpiButton.setText("DPI\n" + next);
-        if (session != null) {
-            stopSession();
-            tryConnect();
+        if (logScroll.getVisibility() == View.VISIBLE) {
+            renderLog();
         }
     }
 
-    // ------------------------------------------------------------------ apps
+    // ================================================================== apps
 
     private void refreshApps() {
         if (adapter == null) {
             return;
         }
-        styleTab(favTabButton, favTab);
-        styleTab(allTabButton, !favTab);
+        styleButton(favTabButton, favTab);
+        styleButton(allTabButton, !favTab);
         String q = searchBox.getText().toString().trim().toLowerCase(Locale.ROOT);
         List<AppEntry> items = new ArrayList<>();
         int highlighted = 0;
 
         if (!q.isEmpty()) {
-            // search covers every app (system included), whatever the tab
             for (AppEntry a : allApps) {
                 if (a.name.toLowerCase(Locale.ROOT).contains(q) || a.packageName.toLowerCase(Locale.ROOT).contains(q)) {
                     items.add(a);
@@ -470,7 +754,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
             List<AppEntry> recentApps = new ArrayList<>();
             List<AppEntry> users = new ArrayList<>();
             List<AppEntry> systems = new ArrayList<>();
-            for (String pkg : recentPackages()) {
+            for (String pkg : csv("recent")) {
                 AppEntry a = findApp(pkg);
                 if (a != null) {
                     recentApps.add(a);
@@ -497,7 +781,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         }
 
         if (allApps.isEmpty()) {
-            emptyView.setText(session == null ? "Not connected" : "Loading app list...");
+            emptyView.setText(linkReady ? "Loading app list..." : "Not connected");
             emptyView.setVisibility(View.VISIBLE);
         } else if (items.isEmpty()) {
             emptyView.setText(!q.isEmpty() ? "No app matches \"" + q + "\""
@@ -518,14 +802,18 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         return null;
     }
 
-    private List<String> favoritePackages() {
+    private List<String> csv(String key) {
         List<String> out = new ArrayList<>();
-        for (String x : prefs.getString("favs", "").split(",")) {
+        for (String x : prefs.getString(key, "").split(",")) {
             if (!x.isEmpty()) {
                 out.add(x);
             }
         }
         return out;
+    }
+
+    private List<String> favoritePackages() {
+        return csv("favs");
     }
 
     private boolean isFavorite(String pkg) {
@@ -550,8 +838,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         List<String> favs = favoritePackages();
         for (AppEntry a : allApps) {
             String n = a.name.toLowerCase(Locale.ROOT);
-            boolean maps = a.packageName.equals("com.google.android.apps.maps")
-                    || n.equals("maps") || n.equals("google maps");
+            boolean maps = a.packageName.equals(MAPS_PKG) || n.equals("maps") || n.equals("google maps");
             boolean morphe = n.contains("morphe");
             if ((maps || morphe) && !favs.contains(a.packageName)) {
                 favs.add(a.packageName);
@@ -581,25 +868,13 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
                 .show();
     }
 
-    private List<String> recentPackages() {
-        String csv = prefs.getString("recent", "");
-        List<String> out = new ArrayList<>();
-        for (String s : csv.split(",")) {
-            if (!s.isEmpty()) {
-                out.add(s);
-            }
-        }
-        return out;
-    }
-
     private void launch(AppEntry app, boolean forceRestart) {
-        if (session == null || app == null) {
+        Pane p = focused;
+        if (app == null || p == null || p.session == null) {
             return;
         }
-        // "+" makes scrcpy force-stop the app first, so a crashed app relaunches on the head unit
-        session.startApp((forceRestart ? "+" : "") + app.packageName);
-        appLaunched = true;
-        List<String> recent = recentPackages();
+        p.launch(app.packageName, forceRestart);
+        List<String> recent = csv("recent");
         recent.remove(app.packageName);
         recent.add(0, app.packageName);
         while (recent.size() > 8) {
@@ -676,7 +951,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         }
     }
 
-    // ------------------------------------------------------------------ USB / session
+    // ================================================================== USB / link
 
     private UsbDevice findPhone() {
         for (UsbDevice d : usb.getDeviceList().values()) {
@@ -688,7 +963,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
     }
 
     private void tryConnect() {
-        if (session != null || surface == null || isFinishing()) {
+        if (link != null || isFinishing()) {
             return;
         }
         UsbDevice d = findPhone();
@@ -707,29 +982,108 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
             setStatus("Allow HeadLink to access the phone (USB)");
             return;
         }
-        int w = surfaceView.getWidth() & ~7;
-        int h = surfaceView.getHeight() & ~7;
-        if (w <= 0 || h <= 0) {
-            ui.postDelayed(this::tryConnect, 300);
+        logLines.clear();
+        link = new PhoneLink(this, usb, d, this);
+        link.start();
+    }
+
+    private void closeLink() {
+        linkReady = false;
+        leftPane.stop();
+        rightPane.stop();
+        if (link != null) {
+            link.close();
+            link = null;
+        }
+    }
+
+    private void paneStarted(Pane p, ScrcpySession s) {
+        if (p.session != s) {
             return;
         }
-        logLines.clear();
-        appLaunched = false;
-        addLog("Virtual display " + w + "x" + h + " @" + currentDpi() + "dpi");
-        session = new ScrcpySession(this, usb, d, surface, w, h, currentDpi(), this);
-        session.start();
-    }
-
-    private void stopSession() {
-        ScrcpySession s = session;
-        session = null;
-        if (s != null) {
-            s.stop();
+        setStatus(null);
+        if (p == rightPane && phoneScreenOff()) {
+            ui.postDelayed(this::applyPhoneScreen, 1500);
+        }
+        if (!p.appLaunched) {
+            String app = p.lastApp();
+            if (!app.isEmpty()) {
+                p.launch(app, false);
+            } else {
+                focus(p);
+                showApps();
+            }
         }
     }
 
-    private boolean onVideoTouch(MotionEvent e) {
-        ScrcpySession s = session;
+    private void paneEnded(Pane p, ScrcpySession s, String reason) {
+        addLog("[" + p.tag + "] ended: " + reason);
+        if (p.session != s) {
+            return;
+        }
+        p.session = null;
+        logScroll.setVisibility(View.VISIBLE);
+        renderLog();
+        setStatus((split ? (p == leftPane ? "Left" : "Right") + " screen stopped: " : "Disconnected: ")
+                + reason + "\nTap Connect to retry, or Log for details");
+    }
+
+    // ---- PhoneLink.Listener (worker thread) ----
+
+    @Override
+    public void onLinkStatus(String text) {
+        ui.post(() -> {
+            addLog("[status] " + text);
+            setStatus(text);
+        });
+    }
+
+    @Override
+    public void onLinkLog(String line) {
+        ui.post(() -> addLog(line));
+    }
+
+    @Override
+    public void onLinkReady() {
+        ui.post(() -> {
+            if (link == null) {
+                return;
+            }
+            linkReady = true;
+            setStatus("Starting screens...");
+            leftPane.start();
+            rightPane.start();
+        });
+    }
+
+    @Override
+    public void onLinkApps(List<AppEntry> apps) {
+        ui.post(() -> {
+            allApps.clear();
+            allApps.addAll(apps);
+            seedFavoritesOnce();
+            if (favoritePackages().isEmpty()) {
+                favTab = false;
+            }
+            refreshApps();
+        });
+    }
+
+    @Override
+    public void onLinkFailed(String reason) {
+        ui.post(() -> {
+            addLog("Link failed: " + reason);
+            closeLink();
+            logScroll.setVisibility(View.VISIBLE);
+            renderLog();
+            setStatus("Disconnected: " + reason + "\nTap Connect to retry, or Log for details");
+        });
+    }
+
+    // ================================================================== touch
+
+    private boolean onVideoTouch(Pane p, MotionEvent e) {
+        ScrcpySession s = p.session;
         if (s == null) {
             return true;
         }
@@ -738,10 +1092,9 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
         if (vw == 0 || vh == 0) {
             return true;
         }
-        float sx = (float) vw / surfaceView.getWidth();
-        float sy = (float) vh / surfaceView.getHeight();
-        int am = e.getActionMasked();
-        switch (am) {
+        float sx = (float) vw / p.view.getWidth();
+        float sy = (float) vh / p.view.getHeight();
+        switch (e.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
             case MotionEvent.ACTION_POINTER_DOWN: {
                 int i = e.getActionIndex();
@@ -768,83 +1121,5 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback, Sc
                 break;
         }
         return true;
-    }
-
-    // ------------------------------------------------------------------ SurfaceHolder
-
-    @Override
-    public void surfaceCreated(SurfaceHolder holder) {
-        surface = holder.getSurface();
-        ui.postDelayed(this::tryConnect, 300);
-    }
-
-    @Override
-    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-        // size is read at connect time
-    }
-
-    @Override
-    public void surfaceDestroyed(SurfaceHolder holder) {
-        stopSession();
-        surface = null;
-    }
-
-    // ------------------------------------------------------------------ session callbacks (worker threads)
-
-    private void addLog(String line) {
-        logLines.addLast(line);
-        while (logLines.size() > MAX_LOG_LINES) {
-            logLines.removeFirst();
-        }
-        if (logScroll.getVisibility() == View.VISIBLE) {
-            renderLog();
-        }
-    }
-
-    @Override
-    public void onStatus(String text) {
-        ui.post(() -> {
-            addLog("[status] " + text);
-            setStatus(text);
-        });
-    }
-
-    @Override
-    public void onLog(String line) {
-        ui.post(() -> addLog(line));
-    }
-
-    @Override
-    public void onApps(List<AppEntry> apps) {
-        ui.post(() -> {
-            allApps.clear();
-            allApps.addAll(apps);
-            seedFavoritesOnce();
-            if (favoritePackages().isEmpty()) {
-                favTab = false;
-            }
-            refreshApps();
-        });
-    }
-
-    @Override
-    public void onStarted(int width, int height) {
-        ui.post(() -> {
-            setStatus(null);
-            if (!appLaunched) {
-                showApps();
-            }
-        });
-    }
-
-    @Override
-    public void onEnded(String reason) {
-        ui.post(() -> {
-            addLog("Ended: " + reason);
-            session = null;
-            logScroll.setVisibility(View.VISIBLE);
-            renderLog();
-            setStatus("Disconnected: " + reason + "\nTap Connect to retry, or Log for details");
-        });
     }
 }
