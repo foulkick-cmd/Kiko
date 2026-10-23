@@ -6,7 +6,7 @@
 (function () {
   'use strict';
   if (window.__AX_LOADED__) return;
-  var AX_VERSION = '1.16.4';
+  var AX_VERSION = '1.16.5';
   window.__AX_LOADED__ = true;
 
   // ---------------------------------------------------------------- config
@@ -451,13 +451,15 @@
     var seenKeys = new Set();
     terms = terms.filter(function (t) { var k = norm(t); if (!k || seenKeys.has(k)) return false; seenKeys.add(k); return true; });
     var keys = terms.map(norm);
-    S.liveFilter = function (u) { return keys.some(function (k) { return u.nameKey.indexOf(k) >= 0; }); };
+    // a term matches the compound name OR the developer ("Sodic" must also bring Vye, فاي, …)
+    var hit = function (u) { var d = norm(u.dev); return keys.some(function (k) { return u.nameKey.indexOf(k) >= 0 || d.indexOf(k) >= 0; }); };
+    S.liveFilter = hit;
     var per = [];
     for (var i = 0; i < terms.length; i++) {
       var r = await fetchAll('q=' + enc(terms[i]) + (base ? '&' + base : ''), 0);
       var kept = 0;
       r.got.forEach(function (u, c) {
-        if (keys.some(function (k) { return u.nameKey.indexOf(k) >= 0; })) { kept++; S.units.set(c, u); }
+        if (hit(u)) { kept++; S.units.set(c, u); }
       });
       per.push(terms[i] + ': ' + kept);
       render();
@@ -636,7 +638,7 @@
       '<div id="ax-head"><b id="ax-title">أداة عقار إكزت</b><button id="ax-close">✕ قفل</button></div>' +
       '<div id="ax-form">' +
       '<label class="full" id="ax-group-wrap">المنطقة<select id="ax-group">' + groups + '</select></label>' +
-      '<label class="full" id="ax-name-wrap">أو اسم الكمبوند (كذا كتابة بفاصلة — بيتجاهل المنطقة)<div class="row"><input id="ax-name" placeholder="Aliva، اليفا، اليڤا"><button type="button" id="ax-name-go" style="white-space:nowrap;padding:6px 12px;border:0;border-radius:8px;background:#0f766e;color:#fff;font:600 13px inherit">بحث</button></div></label>' +
+      '<label class="full" id="ax-name-wrap">أو اسم الكمبوند / المطور (كذا كتابة بفاصلة — بيتجاهل المنطقة)<div class="row"><input id="ax-name" placeholder="Aliva، اليفا، اليڤا"><button type="button" id="ax-name-go" style="white-space:nowrap;padding:6px 12px;border:0;border-radius:8px;background:#0f766e;color:#fff;font:600 13px inherit">بحث</button></div></label>' +
       '<label class="two">إجمالي العقد<div class="row"><input id="ax-tmin" inputmode="numeric" placeholder="من"><input id="ax-tmax" inputmode="numeric" placeholder="إلى"></div></label>' +
       '<label class="two">سعر المتر<div class="row"><input id="ax-pmin" inputmode="numeric" placeholder="من"><input id="ax-pmax" inputmode="numeric" placeholder="إلى"></div></label>' +
       '<label class="two">المساحة م²<div class="row"><input id="ax-amin" inputmode="numeric" placeholder="من"><input id="ax-amax" inputmode="numeric" placeholder="إلى"></div></label>' +
