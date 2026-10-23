@@ -6,7 +6,7 @@
 (function () {
   'use strict';
   if (window.__AX_LOADED__) return;
-  var AX_VERSION = '1.16.5';
+  var AX_VERSION = '1.17.0';
   window.__AX_LOADED__ = true;
 
   // ---------------------------------------------------------------- config
@@ -442,6 +442,16 @@
     verifyMaxPrice(f);
   }
 
+  function splitTerms(text) {
+    var seenKeys = new Set();
+    return text.split(/[,،|+]/).map(function (x) { return x.trim(); }).filter(function (t) {
+      var k = norm(t); if (!k || seenKeys.has(k)) return false; seenKeys.add(k); return true;
+    });
+  }
+  // a term matches the compound name OR the developer ("Sodic" must also bring Vye, فاي, …)
+  function nameHit(keys) {
+    return function (u) { var d = norm(u.dev); return keys.some(function (k) { return (u.nameKey || '').indexOf(k) >= 0 || d.indexOf(k) >= 0; }); };
+  }
   // free-text compound search: keeps units whose (normalized) name contains the text
   async function runNameSearch(text, f) {
     S.units = new Map(); S.coverage = []; S.seen = new Set(); S.expected = null; fetchCount = 0;
@@ -452,7 +462,7 @@
     terms = terms.filter(function (t) { var k = norm(t); if (!k || seenKeys.has(k)) return false; seenKeys.add(k); return true; });
     var keys = terms.map(norm);
     // a term matches the compound name OR the developer ("Sodic" must also bring Vye, فاي, …)
-    var hit = function (u) { var d = norm(u.dev); return keys.some(function (k) { return u.nameKey.indexOf(k) >= 0 || d.indexOf(k) >= 0; }); };
+    var hit = nameHit(keys);
     S.liveFilter = hit;
     var per = [];
     for (var i = 0; i < terms.length; i++) {
@@ -535,6 +545,7 @@
     var arr = [];
     S.units.forEach(function (u) {
       if (u.total == null && u.ppmC === undefined) applyDet(u);   // total missing on the card: use the cached unit-page price
+      if (blocked(u)) return;
       if (f.fin && finCat(u) !== f.fin) return;
       if (f.feat && !u.feat) return;
       if (f.totalMin && !(u.total >= f.totalMin)) return;
@@ -599,6 +610,7 @@
     '#ax-status{padding:6px 10px;font-size:11.5px;line-height:1.5;color:#334155;background:#f1f5f9;border-bottom:1px solid #e2e8f0}',
     '#ax-status .warn{color:#b45309;font-weight:600}',
     '#ax-results{flex:1;overflow:auto;-webkit-overflow-scrolling:touch}',
+    '.ax-nm{border-bottom:1px dotted #94a3b8;cursor:pointer}',
     '#ax-results table{border-collapse:collapse;width:max-content;min-width:100%;font-size:13px}',
     '#ax-results th,#ax-results td{padding:7px 8px;border-bottom:1px solid #e2e8f0;text-align:right;white-space:nowrap;vertical-align:top}',
     '#ax-results th{position:sticky;top:0;background:#e2e8f0;z-index:1}',
@@ -649,7 +661,7 @@
       '<label>المميزة<select id="ax-feat"><option value="">الكل</option><option value="1">⭐ مميزة بس</option></select></label>' +
       '<label>ترتيب (من الأقل)<select id="ax-sort"><option value="ppm">سعر المتر</option><option value="total">إجمالي العقد</option><option value="m2">المساحة</option><option value="delivery">سنة الاستلام</option></select></label>' +
       '<label>العرض<select id="ax-view"><option value="table">جدول</option><option value="cards">كروت</option></select></label>' +
-      '<div id="ax-actions"><button class="pri" id="ax-run">تحميل الوحدات</button><button id="ax-stop">إيقاف</button><button id="ax-export">تصدير Excel</button><button id="ax-diag">🔍 تشخيص المميزة</button><button id="ax-probe">🧩 فحص الكروت</button></div>' +
+      '<div id="ax-actions"><button class="pri" id="ax-run">تحميل الوحدات</button><button id="ax-stop">إيقاف</button><button id="ax-export">تصدير Excel</button><button id="ax-watch-add">🔔 تابع البحث ده كل ساعة</button><button id="ax-watches">🔔 المتابعات</button><button id="ax-black">🚫 المخفية</button><button id="ax-diag">🔍 تشخيص المميزة</button><button id="ax-probe">🧩 فحص الكروت</button></div>' +
       '</div>' +
       '<div id="ax-sum" style="display:none"><span id="ax-sum-text"></span><button id="ax-toggle">⚙️ الفلاتر</button></div>' +
       '<div id="ax-status">اختار المنطقة واضغط "تحميل الوحدات". الفلاتر والترتيب بيتطبقوا فوراً بعد التحميل.</div>' +
@@ -694,6 +706,9 @@
     document.getElementById('ax-export').onclick = exportCSV;
     document.getElementById('ax-diag').onclick = showDiag;
     document.getElementById('ax-probe').onclick = probeParams;
+    document.getElementById('ax-watch-add').onclick = addWatch;
+    document.getElementById('ax-watches').onclick = manageWatches;
+    document.getElementById('ax-black').onclick = manageBlacklist;
     document.getElementById('ax-results').addEventListener('click', onResultsClick);
     return panel;
   }
@@ -761,8 +776,10 @@
   }
 
   function render() {
+    if (!document.getElementById('ax-results')) return;   // headless (background check)
     setStatus();
     var f = readFilters();
+    if (S.freshF) f = Object.assign({}, S.freshF, { sort: f.sort });
     var list = filtered(f);
     var idx = compoundIndex();
     var box = document.getElementById('ax-results');
@@ -774,7 +791,10 @@
       if (lacking) finNote = ' <span style="color:#b45309">— ' + lacking.toLocaleString('en-US') +
         ' وحدة مطابقة لباقي الفلاتر لسه تشطيبها ماتجابش' + (S.running ? (S.prefetchF ? '؛ بيتجاب دلوقتي بالتوازي مع التحميل (' + prefetching.size + ' شغالين)' : '؛ هيتجاب أوتوماتيك بعد ما التحميل يخلص') : '؛ غيّر اختيار التشطيب علشان يتجاب') + '</span>';
     }
-    var head = '<div style="padding:6px 12px;font-size:12px;color:#475569">بعد الفلاتر: <b>' + list.length.toLocaleString('en-US') + '</b> وحدة' + finNote + '</div>';
+    var hid = 0; S.units.forEach(function (u) { if (blocked(u)) hid++; });
+    var head = '<div style="padding:6px 12px;font-size:12px;color:#475569">بعد الفلاتر: <b>' + list.length.toLocaleString('en-US') + '</b> وحدة' + finNote +
+      (hid ? ' · <a href="#" data-blm="1" style="color:#64748b">🚫 مخفي ' + hid + ' (' + BL.length + ' كمبوند)</a>' : '') +
+      ' <span style="color:#94a3b8">— دوس على اسم الكمبوند علشان تخفيه</span></div>';
     var MAX = 600; // keep the DOM light on phones; export has everything
     var shown = list.slice(0, MAX);
     var more = list.length > MAX ? '<div style="padding:10px 12px;color:#64748b">معروض أول ' + MAX + ' — التصدير فيه الكل.</div>' : '';
@@ -801,7 +821,7 @@
       '<button class="ax-btn" data-cmp="' + esc(u.name) + '" data-area="' + esc(u.area) + '">الكمبوند ↗</button>';
   }
   function row(u, i, idx) {
-    return '<tr data-row="' + esc(u.code) + '"><td class="n">' + (i + 1) + '</td><td>' + (u.feat ? '⭐ ' : '') + esc(u.name) + '<br><small style="color:#64748b">' + esc(u.code) + (u.neg ? ' · <span class="ax-tag">تفاوض</span>' : '') + '</small></td>' +
+    return '<tr data-row="' + esc(u.code) + '"><td class="n">' + (i + 1) + '</td><td>' + (u.feat ? '⭐ ' : '') + '<span class="ax-nm" data-hide="' + esc(u.code) + '">' + esc(u.name) + '</span><br><small style="color:#64748b">' + esc(u.code) + (u.neg ? ' · <span class="ax-tag">تفاوض</span>' : '') + '</small></td>' +
       '<td>' + esc(u.area) + '</td><td>' + esc(u.type) + (u.beds ? ' · ' + u.beds + 'غ' : '') + '</td>' +
       '<td class="n">' + fmt(u.m2) + '</td>' +
       '<td data-det="' + esc(u.code) + '" data-k="fin">' + detText(u.fin) + '</td>' +
@@ -811,7 +831,7 @@
       '<td>' + cmpHTML(idx, u) + '</td><td>' + btns(u) + '</td></tr>';
   }
   function card(u, idx) {
-    return '<div class="ax-card" data-row="' + esc(u.code) + '"><h4>' + (u.feat ? '⭐ ' : '') + esc(u.name) + '</h4><div class="sub">' + esc(u.dev) + ' · ' + esc(u.area) + ' · ' + esc(u.code) + (u.neg ? ' · <span class="ax-tag">تفاوض</span>' : '') + '</div>' +
+    return '<div class="ax-card" data-row="' + esc(u.code) + '"><h4>' + (u.feat ? '⭐ ' : '') + '<span class="ax-nm" data-hide="' + esc(u.code) + '">' + esc(u.name) + '</span></h4><div class="sub">' + esc(u.dev) + ' · ' + esc(u.area) + ' · ' + esc(u.code) + (u.neg ? ' · <span class="ax-tag">تفاوض</span>' : '') + '</div>' +
       '<div class="kv"><span>التشطيب</span><span data-det="' + esc(u.code) + '" data-k="fin">' + detText(u.fin) + '</span></div>' +
       '<div class="kv"><span>سعر المتر</span><span class="big">' + fmt(u.ppm) + '</span></div>' +
       '<div class="kv"><span>إجمالي العقد</span><span>' + fmt(u.total) + '</span></div>' +
@@ -824,9 +844,11 @@
   }
 
   function onResultsClick(e) {
-    var t = e.target.closest('[data-open],[data-cmp]');
+    var t = e.target.closest('[data-open],[data-cmp],[data-hide],[data-blm]');
     if (!t) return;
     e.preventDefault();
+    if (t.hasAttribute('data-hide')) { hideCompound(t.getAttribute('data-hide')); return; }
+    if (t.hasAttribute('data-blm')) { manageBlacklist(); return; }
     if (t.hasAttribute('data-open')) {
       openTab(t.getAttribute('data-open'));
     } else {
@@ -844,7 +866,9 @@
   async function run() {
     if (S.running) return;
     S.running = true; S.cancel = false; S.needRerun = false;
+    S.freshF = null;
     var f = readFilters();
+    S.loadedFor = S.compound ? null : (S.nameQuery ? 'n:' + S.nameQuery : 'g:' + f.group);
     S.prefetchF = f.fin ? f : null;
     S.prefetchCount = 0;
     persist();
@@ -1255,9 +1279,208 @@
     }
   }
 
+  // ---------------------------------------------------------------- blacklist (hidden compounds)
+  var BL_KEY = 'ax_black';
+  function blLoad() { try { return JSON.parse(localStorage.getItem(BL_KEY) || '[]'); } catch (e) { return []; } }
+  var BL = blLoad(), blSet = new Set(BL.map(function (b) { return b.k; }));
+  function blSave() {
+    try { localStorage.setItem(BL_KEY, JSON.stringify(BL)); } catch (e) { /* ignore */ }
+    blSet = new Set(BL.map(function (b) { return b.k; }));
+  }
+  function blocked(u) { return !!u.nameKey && blSet.has(u.nameKey); }
+  async function hideCompound(code) {
+    var u = S.units.get(code);
+    if (!u || !u.nameKey) return;
+    if (!(await axConfirm('تخفي كمبوند <b>' + esc(u.name) + '</b>؟<br>مش هيظهر تاني في النتايج ولا التصدير ولا المتابعة.' +
+      '<br><small>الإخفاء بالاسم زي ما هو مكتوب؛ لو الكمبوند مكتوب بكذا شكل، كل شكل بيتخفى لوحده. ترجّعه من "🚫 المخفية".</small>'))) return;
+    BL.push({ k: u.nameKey, n: u.name, a: u.area, t: Date.now() });
+    blSave();
+    render();
+  }
+  function overlayBox(html) {
+    var ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:16px;direction:rtl;font:14px system-ui,sans-serif';
+    ov.innerHTML = '<div style="background:#fff;color:#0f172a;border-radius:14px;max-width:460px;width:100%;max-height:80vh;overflow:auto;padding:14px;box-shadow:0 10px 30px rgba(0,0,0,.3)">' + html + '</div>';
+    document.body.appendChild(ov);
+    return ov;
+  }
+  var BTN = 'padding:6px 10px;border:0;border-radius:8px;font:600 12px system-ui,sans-serif;';
+  function manageBlacklist() {
+    var draw = function () {
+      return '<b>🚫 الكمبوندات المخفية (' + BL.length + ')</b>' +
+        (BL.length ? BL.map(function (b, i) {
+          return '<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #e2e8f0"><span style="flex:1">' + esc(b.n) +
+            (b.a ? ' <small style="color:#64748b">' + esc(b.a) + '</small>' : '') + '</span><button data-un="' + i + '" style="' + BTN + 'background:#e2e8f0">إظهار</button></div>';
+        }).join('') : '<p style="color:#64748b">مفيش حاجة مخفية. دوس على اسم أي كمبوند في النتايج علشان تخفيه.</p>') +
+        '<button data-close="1" style="' + BTN + 'margin-top:12px;width:100%;padding:10px;background:#0f766e;color:#fff">قفل</button>';
+    };
+    var ov = overlayBox(draw());
+    ov.addEventListener('click', function (e) {
+      var b = e.target.closest('[data-un],[data-close]');
+      if (!b) return;
+      if (b.hasAttribute('data-close')) { ov.remove(); render(); return; }
+      BL.splice(+b.getAttribute('data-un'), 1); blSave();
+      ov.firstChild.innerHTML = draw();
+    });
+  }
+
+  // ---------------------------------------------------------------- watches (hourly check for new units)
+  // Each watch = a search + filters. Every hour the app checks the site's newest listings (one request for
+  // a region, one per spelling for a name search), keeps the ones that pass the filters and weren't seen
+  // before, and sends a notification. Stored in localStorage, shared with the background check.
+  var W_KEY = 'ax_watches', SEEN_MAX = 6000, FRESH_MAX = 200;
+  function wLoad() { try { return JSON.parse(localStorage.getItem(W_KEY) || '[]'); } catch (e) { return []; } }
+  function wSave(ws) {
+    try { localStorage.setItem(W_KEY, JSON.stringify(ws)); } catch (e) { /* ignore */ }
+    if (window.AXApp && window.AXApp.watchesChanged) window.AXApp.watchesChanged(ws.length);
+  }
+  function slim(u) {
+    var o = {};
+    ['id', 'code', 'name', 'nameKey', 'dev', 'area', 'type', 'beds', 'm2', 'cash', 'remaining', 'total', 'ppm', 'neg', 'feat',
+      'delivery', 'inst', 'freq', 'url', 'fin', 'payEnd', 'floor', 'cy', 'ppmC', 'pm2', 'derived'].forEach(function (k) { if (u[k] !== undefined) o[k] = u[k]; });
+    return o;
+  }
+  function addWatch() {
+    var f = readFilters(); delete f.sort;
+    var key = S.nameQuery ? 'n:' + S.nameQuery : 'g:' + f.group;
+    var ws = wLoad();
+    var w = { id: 'w' + Date.now(), label: filterSummary().replace(/ · ترتيب:.*$/, ''), name: S.nameQuery || '', group: f.group, f: f,
+      seen: [], seeded: false, fresh: [], last: 0, lastCount: null, err: '' };
+    // what's loaded right now for this same search is the starting point; otherwise the first check sets it
+    if (S.units.size && !S.running && S.loadedFor === key) {
+      S.seenUnits.forEach(function (u, c) { w.seen.push(c); });
+      S.units.forEach(function (u, c) { if (w.seen.indexOf(c) < 0) w.seen.push(c); });
+      w.seeded = true;
+    }
+    ws.push(w); wSave(ws);
+    setStatus('🔔 اتحفظت المتابعة: <b>' + esc(w.label) + '</b> — هتتشيك كل ساعة تقريباً وتبعتلك إشعار لو في وحدات جديدة مطابقة.' +
+      (w.seeded ? '' : '<br><small>أول تشييك هيسجّل الموجود بس من غير إشعار.</small>') +
+      (window.AXApp ? '' : '<br><span class="warn">الإشعارات شغالة في تطبيق الأندرويد بس.</span>'));
+  }
+  async function watchRun(onlyId) {
+    if (/just a moment|attention required/i.test(document.title)) return { retry: true };
+    var ws = wLoad(), out = [], cache = {};
+    var page = function (qs) { if (!cache[qs]) cache[qs] = getPage(qs, CAP); return cache[qs]; };
+    for (var i = 0; i < ws.length; i++) {
+      var w = ws[i];
+      if (onlyId && w.id !== onlyId) continue;
+      try {
+        var f = w.f || {}, cb = f.contractBy ? '&contractBy=' + f.contractBy : '', cand = [];
+        var seen = new Set(w.seen || []);
+        if (w.name) {
+          var terms = splitTerms(w.name), hit = nameHit(terms.map(norm));
+          for (var t = 0; t < terms.length; t++) {
+            var rn = await page('q=' + enc(terms[t]) + '&sort=newest' + cb);
+            cand = cand.concat(rn.units.filter(hit));
+          }
+        } else {
+          var g = findGroup(w.group), areas = new Set(g.areas.map(norm));
+          var inG = function (u) { return g.any || areas.has(norm(u.area)); };
+          var r = await page('sort=newest' + cb);
+          cand = r.units.filter(inG);
+          // even the 192nd newest is unseen -> more may be new than one page holds: ask each area too
+          var lastU = r.units[r.units.length - 1];
+          if (w.seeded && lastU && !seen.has(lastU.code) && !g.any) {
+            for (var a = 0; a < g.areas.length; a++) {
+              var ra = await page('areas=' + enc(g.areas[a]) + '&sort=newest' + cb);
+              cand = cand.concat(ra.units.filter(inG));
+            }
+          }
+        }
+        var byCode = new Map();
+        cand.forEach(function (u) { if (!byCode.has(u.code)) byCode.set(u.code, u); });
+        var news = [];
+        byCode.forEach(function (u, c) { if (!seen.has(c) && !blocked(u)) news.push(u); });
+        if (!w.seeded) {
+          byCode.forEach(function (u, c) { seen.add(c); });
+          w.seeded = true; w.lastCount = 0;
+        } else {
+          for (var d = 0; d < news.length; d++) {
+            var u = news[d];
+            if ((u.total == null || f.fin) && !hasDetails(u)) { try { await detLimited(function () { return fetchDetail(u); }); } catch (e) { /* keep going */ } }
+          }
+          var fresh = news.filter(function (u) {
+            return passesNonFin(u, f) && (!f.fin || finCat(u) === f.fin) && (!f.feat || u.feat);
+          }).sort(function (x, y) { return (x.ppm || 1e12) - (y.ppm || 1e12); });
+          news.forEach(function (u) { seen.add(u.code); });
+          var now = Date.now();
+          w.fresh = fresh.map(function (u) { var o = slim(u); o.t = now; return o; }).concat(w.fresh || []).slice(0, FRESH_MAX);
+          w.lastCount = fresh.length;
+          out.push({ id: w.id, label: w.label, count: fresh.length, top: fresh.slice(0, 5).map(function (u) {
+            return u.name + ' · ' + u.area + ' · ' + fmt(u.m2) + 'م · ' + fmt(u.ppm) + '/م · ' + fmt(u.total);
+          }) });
+        }
+        w.seen = Array.from(seen).slice(-SEEN_MAX);
+        w.last = Date.now(); w.err = '';
+      } catch (e) {
+        w.err = String(e && e.message || e); w.last = Date.now();
+        out.push({ id: w.id, label: w.label, count: 0, error: w.err });
+      }
+    }
+    // merge into the latest copy (the user may have added/removed watches meanwhile)
+    var latest = wLoad(), mine = new Map(ws.map(function (x) { return [x.id, x]; }));
+    latest = latest.map(function (x) { var m = mine.get(x.id); return m && (!onlyId || m.id === onlyId) ? m : x; });
+    try { localStorage.setItem(W_KEY, JSON.stringify(latest)); } catch (e) { /* ignore */ }
+    return out;
+  }
+  window.axWatchRun = async function (onlyId) {
+    var res;
+    try { res = await watchRun(onlyId); } catch (e) { res = [{ error: String(e && e.message || e), count: 0 }]; }
+    var b = window.AXWatch || window.AXApp;
+    if (b && b.watchDone) b.watchDone(JSON.stringify(res));
+    return res;
+  };
+  function showFresh(id) {
+    var w = wLoad().filter(function (x) { return x.id === id; })[0];
+    if (!w) { setStatus('<span class="warn">المتابعة دي اتشالت.</span>'); return; }
+    S.units = new Map(); S.coverage = []; S.compound = null; S.nameQuery = null;
+    (w.fresh || []).forEach(function (u) { S.units.set(u.code, u); });
+    S.freshF = Object.assign({}, w.f || {});
+    setFiltersOpen(false);
+    setStatus('🔔 الجديد من متابعة <b>' + esc(w.label) + '</b>: ' + (w.fresh || []).length + ' وحدة (الأحدث فوق آخر 200)' +
+      '<br><small>آخر تشييك: ' + (w.last ? new Date(w.last).toLocaleString('ar-EG') : '—') + ' — "تحميل الوحدات" يرجّعك للبحث العادي.</small>');
+    render();
+  }
+  function manageWatches() {
+    var draw = function () {
+      var ws = wLoad();
+      return '<b>🔔 المتابعات (' + ws.length + ')</b><div style="font-size:12px;color:#64748b;margin:4px 0 8px">بتتشيك كل ساعة تقريباً (أندرويد ممكن يأخرها شوية لتوفير البطارية).</div>' +
+        (ws.length ? ws.map(function (w) {
+          return '<div style="padding:8px 0;border-bottom:1px solid #e2e8f0"><div>' + esc(w.label) + '</div>' +
+            '<div style="font-size:12px;color:#64748b;margin:3px 0">آخر تشييك: ' + (w.last ? new Date(w.last).toLocaleString('ar-EG') : 'لسه') +
+            (w.lastCount != null ? ' · جديد آخر مرة: ' + w.lastCount : '') + ' · محفوظ: ' + (w.fresh || []).length +
+            (w.err ? ' · <span style="color:#b45309">' + esc(w.err) + '</span>' : '') + '</div>' +
+            '<div style="display:flex;gap:6px;flex-wrap:wrap"><button data-show="' + w.id + '" style="' + BTN + 'background:#0f766e;color:#fff">اعرض الجديد</button>' +
+            '<button data-now="' + w.id + '" style="' + BTN + 'background:#e2e8f0">شيّك دلوقتي</button>' +
+            '<button data-clear="' + w.id + '" style="' + BTN + 'background:#e2e8f0">امسح الجديد</button>' +
+            '<button data-del="' + w.id + '" style="' + BTN + 'background:#fee2e2;color:#991b1b">شيل</button></div></div>';
+        }).join('') : '<p style="color:#64748b">مفيش متابعات. اعمل البحث بالفلاتر اللي عايزها ودوس "🔔 تابع البحث ده كل ساعة".</p>') +
+        '<button data-close="1" style="' + BTN + 'margin-top:12px;width:100%;padding:10px;background:#0f766e;color:#fff">قفل</button>';
+    };
+    var ov = overlayBox(draw());
+    ov.addEventListener('click', async function (e) {
+      var b = e.target.closest('[data-show],[data-now],[data-clear],[data-del],[data-close]');
+      if (!b) return;
+      if (b.hasAttribute('data-close')) { ov.remove(); return; }
+      if (b.hasAttribute('data-show')) { ov.remove(); showFresh(b.getAttribute('data-show')); return; }
+      var ws = wLoad();
+      if (b.hasAttribute('data-del')) { wSave(ws.filter(function (w) { return w.id !== b.getAttribute('data-del'); })); }
+      else if (b.hasAttribute('data-clear')) { ws.forEach(function (w) { if (w.id === b.getAttribute('data-clear')) w.fresh = []; }); wSave(ws); }
+      else if (b.hasAttribute('data-now')) {
+        if (S.running) return;
+        b.textContent = 'بشيّك…'; S.running = true; S.cancel = false;
+        try { var res = await window.axWatchRun(b.getAttribute('data-now')); var r0 = res && res[0];
+          setStatus('🔔 تشييك: ' + (r0 ? (r0.error ? '<span class="warn">' + esc(r0.error) + '</span>' : r0.count + ' جديد') : 'أول تشييك سجّل الموجود')); }
+        finally { S.running = false; queue.length = 0; }
+      }
+      ov.firstChild.innerHTML = draw();
+    });
+  }
+
   // ---------------------------------------------------------------- boot
   function boot() {
     if (!document.body || location.hostname.indexOf('aqarexit.com') < 0) return;
+    if (window.AX_HEADLESS) return;   // background check: no screen
     var panel = buildUI();
     if (window.AXApp) {
       // Android app: the search screen is the home screen
@@ -1265,6 +1488,8 @@
       panel.classList.add('open');
     }
     var h = new URLSearchParams(location.hash.replace(/^#/, ''));
+    if (h.get('ax') === 'watch' && h.get('id')) { panel.classList.add('open'); showFresh(h.get('id')); }
+    if (window.AXApp && window.AXApp.watchesChanged) window.AXApp.watchesChanged(wLoad().length);   // keep the schedule in step
     if (h.get('ax') === 'compound' && h.get('name')) {
       S.compound = { name: h.get('name'), area: h.get('area') || '' };
       document.getElementById('ax-title').textContent = 'كمبوند: ' + S.compound.name;

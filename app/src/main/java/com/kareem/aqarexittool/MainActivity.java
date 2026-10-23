@@ -1,5 +1,6 @@
 package com.kareem.aqarexittool;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.ContentResolver;
@@ -7,7 +8,9 @@ import android.content.ContentValues;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.content.pm.PackageManager;
 import android.provider.MediaStore;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
@@ -34,7 +37,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        toolJs = readAsset("ax-tool.js");
+        toolJs = Assets.read(this, "ax-tool.js");
 
         web = new WebView(this);
         setContentView(web);
@@ -99,18 +102,6 @@ public class MainActivity extends Activity {
         else super.onBackPressed();
     }
 
-    private String readAsset(String name) {
-        try (InputStream in = getAssets().open(name)) {
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buf = new byte[8192];
-            int n;
-            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-            return out.toString(StandardCharsets.UTF_8.name());
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
     /** Methods callable from the page as window.AXApp.* */
     private class Bridge {
         @JavascriptInterface
@@ -119,6 +110,24 @@ public class MainActivity extends Activity {
             i.putExtra(EXTRA_URL, url);
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT | Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
             startActivity(i);
+        }
+
+        /** the page tells us how many watches exist: keep the hourly check (and notification permission) in step */
+        @JavascriptInterface
+        public void watchesChanged(int n) {
+            runOnUiThread(() -> {
+                WatchScheduler.apply(MainActivity.this, n);
+                if (n > 0 && Build.VERSION.SDK_INT >= 33
+                        && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 7);
+                }
+            });
+        }
+
+        /** "check now" from the watches screen */
+        @JavascriptInterface
+        public void watchDone(String json) {
+            Notifier.post(getApplicationContext(), json);
         }
 
         @JavascriptInterface
