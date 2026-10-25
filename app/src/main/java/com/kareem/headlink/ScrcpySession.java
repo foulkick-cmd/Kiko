@@ -40,6 +40,8 @@ final class ScrcpySession {
     private final int dpi;
     private final int bitRate;
     private final boolean withAudio;
+    private final android.content.Context ctx;
+    private volatile float audioGain;
     private final String tag;
     private final Callback cb;
 
@@ -57,8 +59,10 @@ final class ScrcpySession {
     private final ExecutorService controlExec = Executors.newSingleThreadExecutor();
 
     ScrcpySession(AdbConnection adb, Surface surface, int width, int height, int dpi, int bitRate,
-                  boolean withAudio, String tag, Callback cb) {
+                  boolean withAudio, float audioGain, android.content.Context ctx, String tag, Callback cb) {
         this.adb = adb;
+        this.audioGain = audioGain;
+        this.ctx = ctx;
         this.withAudio = withAudio;
         this.bitRate = bitRate;
         this.surface = surface;
@@ -148,7 +152,7 @@ final class ScrcpySession {
             byte[] deviceName = new byte[64];
             video.readFully(deviceName, 64);
             if (audio != null) {
-                audioPlayer = new AudioPlayer(audio, this::log);
+                audioPlayer = new AudioPlayer(ctx, audio, audioGain, this::log);
                 audioPlayer.start();
             }
             byte[] codec = new byte[4];
@@ -322,6 +326,14 @@ final class ScrcpySession {
         b.put((byte) n.length);
         b.put(n);
         sendControl(b.array());
+    }
+
+    void setAudioGain(float g) {
+        audioGain = g;
+        AudioPlayer p = audioPlayer;
+        if (p != null) {
+            p.setGain(g);
+        }
     }
 
     /** Pane hidden (HeadLink in background): stop rendering, keep the phone session alive. */

@@ -1,8 +1,13 @@
 package com.kareem.headlink;
 
+import android.content.Context;
+import android.content.Intent;
 import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
 import android.media.AudioFormat;
+import android.media.AudioManager;
 import android.media.AudioTrack;
+import android.media.audiofx.AudioEffect;
 
 import com.kareem.headlink.adb.AdbStream;
 
@@ -22,13 +27,18 @@ final class AudioPlayer {
         void log(String line);
     }
 
+    private final Context ctx;
     private final AdbStream stream;
     private final Log log;
+    private volatile float gain;
+    private AudioFocusRequest focusRequest;
     private final Thread thread;
     private volatile boolean running = true;
     private AudioTrack track;
 
-    AudioPlayer(AdbStream stream, Log log) {
+    AudioPlayer(Context ctx, AdbStream stream, float gain, Log log) {
+        this.ctx = ctx.getApplicationContext();
+        this.gain = gain;
         this.stream = stream;
         this.log = log;
         thread = new Thread(this::run, "audio");
@@ -39,9 +49,69 @@ final class AudioPlayer {
         thread.start();
     }
 
+    /** Software volume boost applied to every sample (1.0 = unchanged), clipped to 16-bit range. */
+    void setGain(float g) {
+        gain = g;
+    }
+
     void stop() {
         running = false;
         thread.interrupt();
+    }
+
+    private void applyGain(byte[] b, int n) {
+        float g = gain;
+        if (g == 1f) {
+            return;
+        }
+        for (int i = 0; i + 1 < n; i += 2) {
+            int s = (short) ((b[i] & 0xFF) | (b[i + 1] << 8));
+            int v = Math.round(s * g);
+            if (v > Short.MAX_VALUE) {
+                v = Short.MAX_VALUE;
+            } else if (v < Short.MIN_VALUE) {
+                v = Short.MIN_VALUE;
+            }
+            b[i] = (byte) v;
+            b[i + 1] = (byte) (v >> 8);
+        }
+    }
+
+    /**
+     * Behave like a normal music player so the head unit treats this as its media source:
+     * take audio focus, and announce the audio session so system equalizer apps attach to it.
+     */
+    private void requestFocusAndEffects() {
+        AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
+        if (am != null) {
+            focusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build())
+                    .setOnAudioFocusChangeListener(c -> { })
+                    .build();
+            int r = am.requestAudioFocus(focusRequest);
+            log.log("audio: focus " + (r == AudioManager.AUDIOFOCUS_REQUEST_GRANTED ? "granted" : "not granted (" + r + ")"));
+        }
+        Intent i = new Intent(AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION);
+        i.putExtra(AudioEffect.EXTRA_AUDIO_SESSION, track.getAudioSessionId());
+        i.putExtra(AudioEffect.EXTRA_PACKAGE_NAME, ctx.getPackageName());
+        i.putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_MUSIC);
+        ctx.sendBroadcast(i);
+    }
+
+    private void releaseFocusAndEffects() {
+        if (track != null) {
+            Intent i = new Intent(AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION);
+            i.putExtra(AudioEffect.EXTRA_AUDIO_SESSION, track.getAudioSessionId());
+            i.putExtra(AudioEffect.EXTRA_PACKAGE_NAME, ctx.getPackageName());
+            ctx.sendBroadcast(i);
+        }
+        AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
+        if (am != null && focusRequest != null) {
+            am.abandonAudioFocusRequest(focusRequest);
+        }
     }
 
     private void run() {
@@ -77,8 +147,10 @@ final class AudioPlayer {
                     .setBufferSizeInBytes(Math.max(minBuf * 4, 48000)) // ~250 ms of headroom
                     .setTransferMode(AudioTrack.MODE_STREAM)
                     .build();
+            requestFocusAndEffects();
             track.play();
-            log.log("audio: playing (raw PCM 48 kHz stereo)");
+            log.log("audio: playing (raw PCM 48 kHz stereo), session " + track.getAudioSessionId()
+                    + ", boost x" + gain);
 
             byte[] hdr = new byte[12];
             byte[] buf = new byte[0];
@@ -96,7 +168,9 @@ final class AudioPlayer {
                 stream.readFully(buf, size);
                 boolean config = (ptsFlags & (1L << 62)) != 0;
                 if (!config && size > 0) {
-                    track.write(buf, 0, size & ~3); // whole stereo frames only
+                    int n = size & ~3; // whole stereo frames only
+                    applyGain(buf, n);
+                    track.write(buf, 0, n);
                 }
             }
         } catch (IOException e) {
@@ -106,6 +180,7 @@ final class AudioPlayer {
         } catch (RuntimeException e) {
             log.log("audio error: " + e);
         } finally {
+            releaseFocusAndEffects();
             if (track != null) {
                 try {
                     track.stop();

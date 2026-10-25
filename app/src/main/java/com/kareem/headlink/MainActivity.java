@@ -182,9 +182,9 @@ public class MainActivity extends Activity implements PhoneLink.Listener {
             final ScrcpySession[] holder = new ScrcpySession[1];
             int bitRate = link.isWifi() ? 4_000_000 : 8_000_000; // phone hotspot is slower than USB
             // phone audio is global, so only the right pane (always present) carries it
-            boolean withAudio = Pane.this == rightPane;
+            boolean withAudio = Pane.this == rightPane && !audioViaBluetooth();
             ScrcpySession s = new ScrcpySession(link.adb(), surface, surfW & ~7, surfH & ~7, dpi(), bitRate,
-                    withAudio, tag,
+                    withAudio, audioGain(), MainActivity.this, tag,
                     new ScrcpySession.Callback() {
                         @Override
                         public void onLog(String line) {
@@ -417,6 +417,7 @@ public class MainActivity extends Activity implements PhoneLink.Listener {
             tryConnect();
         }), barParams());
         bar.addView(barButton("Log", v -> toggleLog()), barParams());
+        bar.addView(barButton("Audio", v -> showAudioMenu()), barParams());
         bar.addView(barButton("Lock", v -> setLocked(true)), barParams());
 
         FrameLayout content = new FrameLayout(this);
@@ -516,6 +517,70 @@ public class MainActivity extends Activity implements PhoneLink.Listener {
         lp.setMargins(0, dp(10), dp(10), 0);
         lockOverlay.addView(lockBadge, lp);
         return lockOverlay;
+    }
+
+    // ---------------- audio settings
+
+    /** true = HeadLink does not capture audio; the phone plays it itself (to its Bluetooth). */
+    private boolean audioViaBluetooth() {
+        return prefs.getBoolean("audioBt", false);
+    }
+
+    private float audioGain() {
+        return prefs.getFloat("audioGain", 1.0f);
+    }
+
+    private void showAudioMenu() {
+        final float[] gains = {1.0f, 1.5f, 2.0f, 2.5f, 3.0f};
+        boolean bt = audioViaBluetooth();
+        String[] items = {
+                (bt ? "   " : "✔ ") + "Play through HeadLink (head unit speakers)",
+                (bt ? "✔ " : "   ") + "Play from the phone over Bluetooth",
+                "Volume boost: x" + audioGain() + "  (tap to change)"
+        };
+        new AlertDialog.Builder(this)
+                .setTitle("Audio")
+                .setItems(items, (d, which) -> {
+                    if (which == 0 || which == 1) {
+                        boolean newBt = which == 1;
+                        if (newBt != audioViaBluetooth()) {
+                            prefs.edit().putBoolean("audioBt", newBt).apply();
+                            addLog("Audio mode: " + (newBt ? "phone Bluetooth" : "HeadLink"));
+                            if (rightPane.session != null) {
+                                rightPane.restart(); // audio is chosen when the session starts; last app reopens
+                            }
+                            if (newBt) {
+                                setStatusBriefly("Audio now plays from the phone.\n"
+                                        + "Make sure the phone is connected to the head unit by Bluetooth\n"
+                                        + "with \"Media audio\" enabled, and the head unit is on BT music.");
+                            }
+                        }
+                    } else {
+                        String[] labels = new String[gains.length];
+                        for (int i = 0; i < gains.length; i++) {
+                            labels[i] = "x" + gains[i] + (gains[i] == 1.0f ? " (off)" : "");
+                        }
+                        new AlertDialog.Builder(this)
+                                .setTitle("Volume boost")
+                                .setItems(labels, (d2, w2) -> {
+                                    prefs.edit().putFloat("audioGain", gains[w2]).apply();
+                                    if (rightPane.session != null) {
+                                        rightPane.session.setAudioGain(gains[w2]);
+                                    }
+                                })
+                                .show();
+                    }
+                })
+                .show();
+    }
+
+    private void setStatusBriefly(String text) {
+        setStatus(text);
+        ui.postDelayed(() -> {
+            if (text.contentEquals(statusView.getText())) {
+                setStatus(null);
+            }
+        }, 6000);
     }
 
     private void setLocked(boolean on) {
