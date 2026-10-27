@@ -6,7 +6,7 @@
 (function () {
   'use strict';
   if (window.__AX_LOADED__) return;
-  var AX_VERSION = '1.17.0';
+  var AX_VERSION = '1.17.1';
   window.__AX_LOADED__ = true;
 
   // ---------------------------------------------------------------- config
@@ -64,9 +64,15 @@
     'المنصورة الجديدة', 'طنطا', 'الزقازيق', 'بنها', 'شبين الكوم', 'دمنهور', 'كفر الشيخ', 'المحلة الكبرى',
     'الفيوم', 'بني سويف', 'المنيا', 'أسيوط', 'سوهاج', 'قنا', 'الأقصر', 'أسوان', 'الغردقة الجديدة',
     'طيبة الجديدة', 'أخميم الجديدة'];
+  // areas the site added after SITE_AREAS was written; found automatically by the "no area" load
+  function extraAreas() { try { return JSON.parse(localStorage.getItem('ax_extra_areas') || '[]'); } catch (e) { return []; } }
+  function allAreas() {
+    var k = new Set(SITE_AREAS.map(norm));
+    return SITE_AREAS.concat(extraAreas().filter(function (a) { return !k.has(norm(a)); }));
+  }
   function findGroup(id) {
     // empty area filter = no area restriction: every area the site lists (+ seller-typed east areas)
-    if (!id) return { id: '', label: 'من غير منطقة', areas: SITE_AREAS, free: G_EAST_FREE, any: true };
+    if (!id) return { id: '', label: 'من غير منطقة', areas: allAreas(), free: G_EAST_FREE, any: true };
     if (id.indexOf('a:') === 0) {
       var a = id.slice(2);
       return { id: id, label: a, areas: [a], free: [] };
@@ -277,7 +283,7 @@
       function once() {
         var ctl = new AbortController();
         var timer = setTimeout(function () { ctl.abort(); }, 30000);
-        return fetch(url, { credentials: 'include', signal: ctl.signal })
+        return fetch(url, { credentials: 'include', signal: ctl.signal, cache: 'no-store' })
           .then(function (r) {
             if (!r.ok) throw new Error('HTTP ' + r.status);
             return r.text();
@@ -405,14 +411,28 @@
     S.groupAreas = new Set(group.areas.map(norm));
     S.liveFilter = function (u) { return S.groupAny || S.groupAreas.has(norm(u.area)); };
     var base = serverQS(f);
+    var areasList = group.areas.slice();
+    // whole site: compare the site's own total with the sum of our areas; find areas we don't know yet
+    var siteTotal = null;
+    if (group.any) {
+      try { siteTotal = (await getPage(base, PAGE)).count; } catch (e) { if (S.cancel) throw e; }
+    }
     // quick count per area first, so progress shows the real target
-    var counts = await Promise.all(group.areas.map(function (area) {
+    var counts = await Promise.all(areasList.map(function (area) {
       return getPage('areas=' + enc(area) + (base ? '&' + base : ''), PAGE)
         .then(function (r) { return r.count || 0; }, function (e) { if (S.cancel) throw e; return 0; });
     }));
     S.expected = counts.reduce(function (a, b) { return a + b; }, 0);
+    if (group.any && siteTotal && siteTotal > S.expected) {
+      setStatus('الموقع فيه ' + siteTotal.toLocaleString('en-US') + ' وحدة ومناطقي فيها ' + S.expected.toLocaleString('en-US') + ' — بدوّر على مناطق جديدة…');
+      var found = await discoverAreas(base, siteTotal);
+      found.forEach(function (x) { areasList.push(x.area); S.expected += x.count; });
+      S.groupAreas = new Set(areasList.map(norm));
+      S.newAreas = found;
+    } else S.newAreas = [];
+    S.siteTotal = siteTotal;
     setStatus();
-    await Promise.all(group.areas.map(async function (area) {
+    await Promise.all(areasList.map(async function (area) {
       var qs = 'areas=' + enc(area) + (base ? '&' + base : '');
       try {
         var r = await fetchAll(qs, 0);
@@ -453,6 +473,28 @@
     return function (u) { var d = norm(u.dev); return keys.some(function (k) { return (u.nameKey || '').indexOf(k) >= 0 || d.indexOf(k) >= 0; }); };
   }
   // free-text compound search: keeps units whose (normalized) name contains the text
+  // read the newest/cheapest/... pages of the whole site, collect area names we don't know, keep the ones
+  // the site's own area filter accepts, and remember them for next time
+  async function discoverAreas(base, siteTotal) {
+    var known = new Set(allAreas().map(norm).concat(G_EAST_FREE.map(norm))), cand = new Map();
+    for (var i = 0; i < SORT_VARIANTS.length; i += CONCURRENCY) {
+      var res = await Promise.all(SORT_VARIANTS.slice(i, i + CONCURRENCY).map(function (v) { return getPage((base ? base + '&' : '') + v, CAP); }));
+      res.forEach(function (r) { r.units.forEach(function (u) { var a = (u.area || '').trim(), k = norm(a); if (a && !known.has(k) && !cand.has(k)) cand.set(k, a); }); });
+    }
+    var found = [];
+    var list = Array.from(cand.values());
+    for (var j = 0; j < list.length; j++) {
+      var r2 = await getPage('areas=' + enc(list[j]) + (base ? '&' + base : ''), PAGE);
+      if (r2.count && r2.count < siteTotal) found.push({ area: list[j], count: r2.count });
+    }
+    if (found.length) {
+      var ex = extraAreas();
+      found.forEach(function (x) { if (ex.indexOf(x.area) < 0) ex.push(x.area); });
+      try { localStorage.setItem('ax_extra_areas', JSON.stringify(ex)); } catch (e) { /* ignore */ }
+    }
+    return found;
+  }
+
   async function runNameSearch(text, f) {
     S.units = new Map(); S.coverage = []; S.seen = new Set(); S.expected = null; fetchCount = 0;
     var base = serverQS(f);
@@ -642,7 +684,7 @@
       GROUPS.map(function (g) { return '<option value="' + g.id + '">' + esc(g.label) + '</option>'; }).join('') +
       '<option value="">— من غير منطقة (كل مناطق الموقع) —</option>' +
       '</optgroup><optgroup label="منطقة واحدة">' +
-      SITE_AREAS.map(function (a) { return '<option value="a:' + esc(a) + '">' + esc(a) + '</option>'; }).join('') +
+      allAreas().map(function (a) { return '<option value="a:' + esc(a) + '">' + esc(a) + '</option>'; }).join('') +
       '</optgroup>';
 
     var panel = el(
@@ -770,6 +812,8 @@
       var c = S.coverage[0];
       html += 'وحدات الكمبوند بنفس كتابة الاسم: <b>' + (c.kept || 0) + '</b> (من ' + c.got + ' نتيجة بحث)<br>';
     }
+    if (S.siteTotal && !S.nameQuery && !S.compound) html += 'إجمالي الموقع: ' + S.siteTotal.toLocaleString('en-US') + ' وحدة' +
+      (S.newAreas && S.newAreas.length ? ' — مناطق جديدة اتضافت: ' + esc(S.newAreas.map(function (x) { return x.area + ' (' + x.count + ')'; }).join('، ')) : '') + '<br>';
     if (failed.length) html += '<span class="warn">' + esc(failed.join('، ')) + ' — دوس "تحميل الوحدات" تاني</span><br>';
     html += statusExtra;
     box.innerHTML = html;
@@ -866,7 +910,7 @@
   async function run() {
     if (S.running) return;
     S.running = true; S.cancel = false; S.needRerun = false;
-    S.freshF = null;
+    S.freshF = null; S.siteTotal = null; S.newAreas = [];
     var f = readFilters();
     S.loadedFor = S.compound ? null : (S.nameQuery ? 'n:' + S.nameQuery : 'g:' + f.group);
     S.prefetchF = f.fin ? f : null;
