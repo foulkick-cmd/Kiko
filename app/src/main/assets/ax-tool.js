@@ -6,7 +6,7 @@
 (function () {
   'use strict';
   if (window.__AX_LOADED__) return;
-  var AX_VERSION = '1.17.1';
+  var AX_VERSION = '1.17.2';
   window.__AX_LOADED__ = true;
 
   // ---------------------------------------------------------------- config
@@ -701,7 +701,7 @@
       ['brick', 'semi', 'full', 'other', 'none'].map(function (k) { return '<option value="' + k + '">' + FIN_LABELS[k] + '</option>'; }).join('') +
       '</select></label>' +
       '<label>المميزة<select id="ax-feat"><option value="">الكل</option><option value="1">⭐ مميزة بس</option></select></label>' +
-      '<label>ترتيب (من الأقل)<select id="ax-sort"><option value="ppm">سعر المتر</option><option value="total">إجمالي العقد</option><option value="m2">المساحة</option><option value="delivery">سنة الاستلام</option></select></label>' +
+      '<label>ترتيب (من الأقل)<select id="ax-sort"><option value="ppm">سعر المتر</option><option value="total">إجمالي العقد</option><option value="cash">الكاش</option><option value="m2">المساحة</option><option value="delivery">سنة الاستلام</option></select></label>' +
       '<label>العرض<select id="ax-view"><option value="table">جدول</option><option value="cards">كروت</option></select></label>' +
       '<div id="ax-actions"><button class="pri" id="ax-run">تحميل الوحدات</button><button id="ax-stop">إيقاف</button><button id="ax-export">تصدير Excel</button><button id="ax-watch-add">🔔 تابع البحث ده كل ساعة</button><button id="ax-watches">🔔 المتابعات</button><button id="ax-black">🚫 المخفية</button><button id="ax-diag">🔍 تشخيص المميزة</button><button id="ax-probe">🧩 فحص الكروت</button></div>' +
       '</div>' +
