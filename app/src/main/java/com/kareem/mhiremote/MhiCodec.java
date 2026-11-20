@@ -1,23 +1,19 @@
 package com.kareem.mhiremote;
 
 /**
- * Mitsubishi Heavy Industries IR encoders, four variants:
- *  ZJ  - 88-bit, remote RKX502A001C   (IRremoteESP8266 MITSUBISHI_HEAVY_88, verified byte-for-byte)
- *  ZEA - 88-bit frame, different fan/air-flow codes (ToniA arduino-heatpumpir, ZEA class)
- *  ZMP - 88-bit frame, remote RKX502A001P, no left/right flow, no 3D (ToniA, ZMP class)
- *  ZM  - 152-bit, remote RLA502A700B  (IRremoteESP8266 MITSUBISHI_HEAVY_152, verified byte-for-byte)
- *
- * All returned arrays use IRremoteESP8266 byte convention (bit 1 = short space, LSB first).
- * ToniA's library sends the bitwise inverse with swapped space lengths, which is the same
- * waveform, so its bytes are converted with ~b.
+ * Mitsubishi Heavy Industries 88-bit IR encoders:
+ *  CR  - ZJ frame with left/right = 0 by default, as sent by a real SRK13CRV remote
+ *        (SmartIR code set 1680, decoded byte-for-byte)
+ *  ZJ  - remote RKX502A001C (IRremoteESP8266 MITSUBISHI_HEAVY_88, verified byte-for-byte)
+ *  ZMP - remote RKX502A001P, no left/right flow, no 3D (ToniA arduino-heatpumpir, verified)
+ * Bytes use IRremoteESP8266 convention (bit 1 = short space, LSB first).
  */
 public final class MhiCodec {
 
-    public static final int PROTO_ZJ = 0;
-    public static final int PROTO_ZEA = 1;
+    public static final int PROTO_CR = 0;
+    public static final int PROTO_ZJ = 1;
     public static final int PROTO_ZMP = 2;
-    public static final int PROTO_ZM = 3;
-    public static final String[] PROTO_NAMES = {"ZJ", "ZEA", "ZMP", "ZM"};
+    public static final String[] PROTO_NAMES = {"CR", "ZJ", "ZMP"};
 
     public static final int MODE_AUTO = 0;
     public static final int MODE_COOL = 1;
@@ -35,6 +31,8 @@ public final class MhiCodec {
 
     public static final String[] SWING_V_NAMES = {"Swing", "Top", "High", "Middle", "Low", "Bottom"};
     public static final String[] SWING_H_NAMES = {"Swing", "Far left", "Left", "Center", "Right", "Far right"};
+    /** CR: real SRK13CRV remote capture (SmartIR 1680) sends left/right = 0, so that is the default. */
+    public static final String[] SWING_H_NAMES_CR = {"Fixed", "Far left", "Left", "Center", "Right", "Far right", "Swing"};
 
     public static final int MIN_TEMP = 18;
     public static final int MAX_TEMP = 30;
@@ -61,15 +59,15 @@ public final class MhiCodec {
     /** Whether a feature exists in a protocol (used to disable keys). */
     public static boolean hasSwingH(int p) { return p != PROTO_ZMP; }
     public static boolean has3D(int p) { return p != PROTO_ZMP; }
+    public static String[] swingHNames(int p) { return p == PROTO_CR ? SWING_H_NAMES_CR : SWING_H_NAMES; }
 
     private MhiCodec() {}
 
     public static int[] encode(int protocol, State s) {
         switch (protocol) {
-            case PROTO_ZEA: return encodeZea(s);
             case PROTO_ZMP: return encodeZmp(s);
-            case PROTO_ZM: return encodeZm(s);
-            default: return encodeZj(s);
+            case PROTO_ZJ: return encode88(s, SH_88);
+            default: return encode88(s, SH_CR);
         }
     }
 
@@ -82,16 +80,23 @@ public final class MhiCodec {
     private static final int[] SIG_88 = {0xAD, 0x51, 0x3C, 0xD9, 0x26};
     private static final int[] SV_88 = {0b100, 0b110, 0b001, 0b011, 0b101, 0b111};
     private static final int[] SH_88 = {0b1000, 0b0001, 0b0101, 0b1001, 0b1101, 0b0010};
+    private static final int[] SH_CR = {0b0000, 0b0001, 0b0101, 0b1001, 0b1101, 0b0010, 0b1000};
 
     public static int[] encodeZj(State s) {
+        return encode88(s, SH_88);
+    }
+
+    private static int[] encode88(State s, int[] shTable) {
         int[] r = new int[11];
         System.arraycopy(SIG_88, 0, r, 0, 5);
         int fan;
         if (s.boost == BOOST_HIPOWER) fan = 6;
         else if (s.boost == BOOST_ECONO) fan = 7;
         else fan = (s.fan == FAN_HI) ? 4 : (s.fan == FAN_MED) ? 3 : (s.fan == FAN_LO) ? 2 : 0;
+        // real CR remote always sends fan = auto in DRY
+        if (shTable == SH_CR && s.mode == MODE_DRY) fan = 0;
         int sv = SV_88[s.swingV];
-        int sh = s.threeD ? 0b1110 : SH_88[s.swingH];
+        int sh = s.threeD ? 0b1110 : shTable[Math.min(s.swingH, shTable.length - 1)];
         r[5] = ((sv & 1) << 1) | ((sh & 3) << 2) | (s.clean ? 1 << 5 : 0) | (((sh >> 2) & 3) << 6);
         r[7] = (((sv >> 1) & 3) << 3) | ((fan & 7) << 5);
         r[9] = (s.mode & 7) | (s.power ? 8 : 0) | (((clampTemp(s.temp) - 17) & 0xF) << 4);
@@ -99,43 +104,12 @@ public final class MhiCodec {
         return r;
     }
 
-    // ------------------------------------------------------------------ ZM (IRremoteESP8266 152-bit)
-
-    private static final int[] SIG_152 = {0xAD, 0x51, 0x3C, 0xE5, 0x1A};
-
-    public static int[] encodeZm(State s) {
-        int[] r = new int[19];
-        System.arraycopy(SIG_152, 0, r, 0, 5);
-        int fan;
-        if (s.boost == BOOST_HIPOWER) fan = 8;
-        else if (s.boost == BOOST_ECONO) fan = 6;
-        else fan = (s.fan == FAN_HI) ? 4 : (s.fan == FAN_MED) ? 3 : (s.fan == FAN_LO) ? 2 : 0;
-        r[5] = (s.mode & 7) | (s.power ? 8 : 0) | (s.clean ? (1 << 5) | (1 << 6) : 0);
-        r[7] = (clampTemp(s.temp) - 17) & 0xF;
-        r[9] = fan & 0xF;
-        r[11] = (s.threeD ? (1 << 1) | (1 << 4) : 0) | ((s.swingV & 7) << 5);
-        r[13] = s.swingH & 0xF;
-        r[17] = 0x80;
-        invertPairs(r);
-        return r;
-    }
-
-    // ------------------------------------------------------------------ ToniA family (ZEA, ZMP)
+    // ------------------------------------------------------------------ ToniA family (ZMP)
 
     // ToniA codes (inverted convention)
     private static final int T_MODE_AUTO = 0x07, T_MODE_COOL = 0x06, T_MODE_DRY = 0x05, T_MODE_FAN = 0x04;
     private static final int T_POWER_ON = 0x00, T_POWER_OFF = 0x08;
     private static final int[] T_HEADER = {0x52, 0xAE, 0xC3, 0x26, 0xD9};
-
-    // ZEA
-    private static final int ZEA_FAN_AUTO = 0xE0, ZEA_FAN1 = 0xC2, ZEA_FAN2 = 0xA4, ZEA_FAN3 = 0x86;
-    private static final int ZEA_HIPOWER = 0x2C, ZEA_ECONO = 0x0E;
-    private static final int ZEA_CLEAN_ON = 0x00, ZEA_CLEAN_OFF = 0x08;
-    // swing index order: SWING, UP, MUP, MIDDLE, MDOWN, DOWN
-    private static final int[] ZEA_VS = {0x1A, 0x0E, 0x31, 0x25, 0x19, 0x0D};
-    // swing index order: SWING, LEFT, MLEFT, MIDDLE, MRIGHT, RIGHT
-    private static final int[] ZEA_HS = {0xD2, 0xC3, 0xB4, 0xA5, 0x96, 0x87};
-    private static final int ZEA_HS_3DAUTO = 0xE1;
 
     // ZMP
     private static final int ZMP_FAN_AUTO = 0xE0, ZMP_FAN1 = 0xA0, ZMP_FAN2 = 0x80, ZMP_FAN3 = 0x60;
@@ -174,27 +148,6 @@ public final class MhiCodec {
         int[] r = new int[11];
         for (int i = 0; i < 11; i++) r[i] = ~t[i] & 0xFF;
         return r;
-    }
-
-    public static int[] encodeZea(State s) {
-        int power = s.power ? T_POWER_ON : T_POWER_OFF;
-        int clean = ZEA_CLEAN_OFF;
-        if (s.clean && !s.power && s.mode != MODE_FAN) {
-            power = T_POWER_ON;
-            clean = ZEA_CLEAN_ON;
-        }
-        int fan;
-        if (s.boost == BOOST_HIPOWER) fan = ZEA_HIPOWER;
-        else if (s.boost == BOOST_ECONO) fan = ZEA_ECONO;
-        else fan = (s.fan == FAN_LO) ? ZEA_FAN1 : (s.fan == FAN_MED) ? ZEA_FAN2
-                : (s.fan == FAN_HI) ? ZEA_FAN3 : ZEA_FAN_AUTO;
-        int sv = ZEA_VS[s.swingV];
-        int sh = ZEA_HS[s.swingH];
-        if (s.threeD && (s.mode == MODE_AUTO || s.mode == MODE_COOL)) sh = ZEA_HS_3DAUTO;
-        int b5 = 0xDF | (sh & 0xF0) | ((sv >> 1) & 0x01) | clean;
-        int b7 = 0x07 | (fan & 0xE0) | ((sv >> 1) & 0x18);
-        int b9 = tMode(s.mode) | power | tTemp(s.temp);
-        return tFrame(b5, b7, b9);
     }
 
     public static int[] encodeZmp(State s) {

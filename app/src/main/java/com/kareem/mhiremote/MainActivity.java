@@ -34,8 +34,8 @@ public class MainActivity extends Activity {
     private static final int OFF_RED = Color.parseColor("#DA3633");
 
     private final MhiCodec.State st = new MhiCodec.State();
-    private int protocol = MhiCodec.PROTO_ZJ;
-    private final TextView[] protoChips = new TextView[4];
+    private int protocol = MhiCodec.PROTO_CR;
+    private final TextView[] protoChips = new TextView[MhiCodec.PROTO_NAMES.length];
     private ConsumerIrManager ir;
     private SharedPreferences prefs;
 
@@ -136,13 +136,14 @@ public class MainActivity extends Activity {
         TextView pl = text("PROTOCOL", 10, MUTED, true);
         pl.setLetterSpacing(0.15f);
         protoRow.addView(pl, new LinearLayout.LayoutParams(dp(78), ViewGroup.LayoutParams.WRAP_CONTENT));
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < MhiCodec.PROTO_NAMES.length; i++) {
             final int idx = i;
             TextView c = text(MhiCodec.PROTO_NAMES[i], 12, TEXT, true);
             c.setGravity(Gravity.CENTER);
             c.setOnClickListener(v -> {
                 v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
                 protocol = idx;
+                st.swingH = Math.min(st.swingH, MhiCodec.swingHNames(protocol).length - 1);
                 save();
                 refresh();
                 statusLine.setText("Protocol " + MhiCodec.PROTO_NAMES[idx] + " selected");
@@ -230,7 +231,7 @@ public class MainActivity extends Activity {
         tileHiPower = tile(g1, "HI POWER", null, v -> { toggleBoost(MhiCodec.BOOST_HIPOWER); send(); });
         tileEcono = tile(g1, "ECONO", null, v -> { toggleBoost(MhiCodec.BOOST_ECONO); send(); });
         tileV = tile(g2, "▲▼ FLOW", valV, v -> { st.swingV = (st.swingV + 1) % 6; send(); });
-        tileH = tile(g2, "◀▶ FLOW", valH, v -> { if (!MhiCodec.hasSwingH(protocol)) { notAvailable("◀▶ FLOW"); return; } st.threeD = false; st.swingH = (st.swingH + 1) % 6; send(); });
+        tileH = tile(g2, "◀▶ FLOW", valH, v -> { if (!MhiCodec.hasSwingH(protocol)) { notAvailable("◀▶ FLOW"); return; } st.threeD = false; st.swingH = (st.swingH + 1) % MhiCodec.swingHNames(protocol).length; send(); });
         tile3d = tile(g2, "3D AUTO", null, v -> { if (!MhiCodec.has3D(protocol)) { notAvailable("3D AUTO"); return; } st.threeD = !st.threeD; send(); });
         tileClean = tile(g2, "CLEAN", null, v -> { st.clean = !st.clean; send(); });
 
@@ -334,6 +335,11 @@ public class MainActivity extends Activity {
         st.fan = order[(i + 1) % order.length];
     }
 
+    private String hName() {
+        String[] n = MhiCodec.swingHNames(protocol);
+        return n[Math.min(st.swingH, n.length - 1)];
+    }
+
     private void notAvailable(String key) {
         statusLine.setText(key + " is not available in " + MhiCodec.PROTO_NAMES[protocol]);
     }
@@ -381,9 +387,10 @@ public class MainActivity extends Activity {
 
         String fan = st.boost == MhiCodec.BOOST_HIPOWER ? "Hi Power"
                 : st.boost == MhiCodec.BOOST_ECONO ? "Econo" : FAN_NAMES[st.fan];
+        if (protocol == MhiCodec.PROTO_CR && st.mode == MhiCodec.MODE_DRY) fan = "Auto (Dry)";
         infoFan.setText(fan);
         infoV.setText(MhiCodec.SWING_V_NAMES[st.swingV]);
-        infoH.setText(st.threeD ? "3D Auto" : MhiCodec.SWING_H_NAMES[st.swingH]);
+        infoH.setText(st.threeD ? "3D Auto" : hName());
 
         styleChip(chipHiPower, st.boost == MhiCodec.BOOST_HIPOWER);
         styleChip(chipEcono, st.boost == MhiCodec.BOOST_ECONO);
@@ -393,7 +400,7 @@ public class MainActivity extends Activity {
         valMode.setText(MODE_NAMES[st.mode]);
         valFan.setText(fan);
         valV.setText(MhiCodec.SWING_V_NAMES[st.swingV]);
-        valH.setText(st.threeD ? "3D" : MhiCodec.SWING_H_NAMES[st.swingH]);
+        valH.setText(st.threeD ? "3D" : hName());
 
         styleTile(tileMode, false);
         styleTile(tileFan, false);
@@ -404,7 +411,7 @@ public class MainActivity extends Activity {
         styleTile(tile3d, st.threeD);
         styleTile(tileClean, st.clean);
 
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < protoChips.length; i++) {
             boolean a = i == protocol;
             protoChips[i].setBackground(rounded(a ? ACCENT_DIM : TILE, dp(17), a ? ACCENT : STROKE));
             protoChips[i].setTextColor(a ? ACCENT : MUTED);
@@ -433,7 +440,7 @@ public class MainActivity extends Activity {
 
     private void save() {
         prefs.edit()
-                .putInt("proto4", protocol)
+                .putInt("proto3", protocol)
                 .putBoolean("power", st.power).putInt("mode", st.mode).putInt("temp", st.temp)
                 .putInt("fan", st.fan).putInt("boost", st.boost)
                 .putInt("swingV", st.swingV).putInt("swingH", st.swingH)
@@ -442,14 +449,14 @@ public class MainActivity extends Activity {
     }
 
     private void load() {
-        protocol = prefs.getInt("proto4", MhiCodec.PROTO_ZJ);
+        protocol = prefs.getInt("proto3", MhiCodec.PROTO_CR);
         st.power = prefs.getBoolean("power", false);
         st.mode = prefs.getInt("mode", MhiCodec.MODE_COOL);
         st.temp = prefs.getInt("temp", 24);
         st.fan = prefs.getInt("fan", MhiCodec.FAN_AUTO);
         st.boost = prefs.getInt("boost", MhiCodec.BOOST_NONE);
         st.swingV = prefs.getInt("swingV", 0);
-        st.swingH = prefs.getInt("swingH", 0);
+        st.swingH = Math.min(prefs.getInt("swingH", 0), MhiCodec.swingHNames(protocol).length - 1);
         st.threeD = prefs.getBoolean("threeD", false);
         st.clean = prefs.getBoolean("clean", false);
     }
