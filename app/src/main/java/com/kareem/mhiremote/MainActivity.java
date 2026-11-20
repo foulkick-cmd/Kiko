@@ -174,13 +174,13 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams tlp = weighted(1.3f);
         tlp.topMargin = dp(14);
         root.addView(tempCtl, tlp);
-        tempCtl.addView(roundKey("−", v -> { tempStep(-1); send(); }),
+        tempCtl.addView(roundKey("−", v -> { clearExtras(); tempStep(-1); send(); }),
                 new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1));
         TextView tl = text("TEMP", 13, MUTED, true);
         tl.setGravity(Gravity.CENTER);
         tl.setLetterSpacing(0.2f);
         tempCtl.addView(tl, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 0.8f));
-        tempCtl.addView(roundKey("+", v -> { tempStep(1); send(); }),
+        tempCtl.addView(roundKey("+", v -> { clearExtras(); tempStep(1); send(); }),
                 new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1));
 
         // Function grid: 2 rows x 4
@@ -197,14 +197,14 @@ public class MainActivity extends Activity {
         valFan = new TextView(this);
         valV = new TextView(this);
         valH = new TextView(this);
-        tileMode = tile(g1, "MODE", valMode, v -> { cycleMode(); send(); });
-        tileFan = tile(g1, "FAN", valFan, v -> { cycleFan(); send(); });
-        tileHiPower = tile(g1, "HI POWER", null, v -> { toggleBoost(MhiCodec.BOOST_HIPOWER); send(); });
-        tileEcono = tile(g1, "ECONO", null, v -> { toggleBoost(MhiCodec.BOOST_ECONO); send(); });
-        tileV = tile(g2, "▲▼ FLOW", valV, v -> { st.swingV = (st.swingV + 1) % 6; send(); });
-        tileH = tile(g2, "◀▶ FLOW", valH, v -> { st.threeD = false; st.swingH = (st.swingH + 1) % 6; send(); });
-        tile3d = tile(g2, "3D AUTO", null, v -> { st.threeD = !st.threeD; send(); });
-        tileClean = tile(g2, "CLEAN", null, v -> { st.clean = !st.clean; send(); });
+        tileMode = tile(g1, "MODE", valMode, v -> { clearExtras(); cycleMode(); send(); });
+        tileFan = tile(g1, "FAN", valFan, v -> { clearExtras(); cycleFan(); send(); });
+        tileHiPower = tile(g1, "HI POWER", null, v -> { boolean was = st.boost == MhiCodec.BOOST_HIPOWER; clearExtras(); if (!was) st.boost = MhiCodec.BOOST_HIPOWER; send(); });
+        tileEcono = tile(g1, "ECONO", null, v -> { boolean was = st.boost == MhiCodec.BOOST_ECONO; clearExtras(); if (!was) st.boost = MhiCodec.BOOST_ECONO; send(); });
+        tileV = tile(g2, "▲▼ FLOW", valV, v -> { clearExtras(); st.swingV = (st.swingV + 1) % 6; send(); });
+        tileH = tile(g2, "◀▶ FLOW", valH, v -> { clearExtras(); st.swingH = (st.swingH + 1) % 6; send(); });
+        tile3d = tile(g2, "3D AUTO", null, v -> { boolean was = st.threeD; clearExtras(); st.threeD = !was; send(); });
+        tileClean = tile(g2, "CLEAN", null, v -> { boolean was = st.clean; clearExtras(); st.clean = !was; send(); });
 
         // Power
         powerBtn = text("TURN ON", 16, Color.WHITE, true);
@@ -212,6 +212,7 @@ public class MainActivity extends Activity {
         powerBtn.setLetterSpacing(0.15f);
         powerBtn.setOnClickListener(v -> {
             v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+            clearExtras();
             st.power = !st.power;
             send();
         });
@@ -306,8 +307,11 @@ public class MainActivity extends Activity {
         st.fan = order[(i + 1) % order.length];
     }
 
-    private void toggleBoost(int which) {
-        st.boost = (st.boost == which) ? MhiCodec.BOOST_NONE : which;
+    /** HI POWER, ECONO, 3D AUTO and CLEAN only ride along with their own key press. */
+    private void clearExtras() {
+        st.boost = MhiCodec.BOOST_NONE;
+        st.threeD = false;
+        st.clean = false;
     }
 
     private void tempStep(int d) {
