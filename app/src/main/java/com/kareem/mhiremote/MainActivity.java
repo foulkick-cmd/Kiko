@@ -34,6 +34,8 @@ public class MainActivity extends Activity {
     private static final int OFF_RED = Color.parseColor("#DA3633");
 
     private final MhiCodec.State st = new MhiCodec.State();
+    private int protocol = MhiCodec.PROTO_ZJ;
+    private final TextView[] protoChips = new TextView[4];
     private ConsumerIrManager ir;
     private SharedPreferences prefs;
 
@@ -127,6 +129,32 @@ public class MainActivity extends Activity {
         header.addView(powerChip);
         root.addView(header);
 
+        // Protocol picker
+        LinearLayout protoRow = new LinearLayout(this);
+        protoRow.setGravity(Gravity.CENTER_VERTICAL);
+        protoRow.setPadding(0, dp(14), 0, 0);
+        TextView pl = text("PROTOCOL", 10, MUTED, true);
+        pl.setLetterSpacing(0.15f);
+        protoRow.addView(pl, new LinearLayout.LayoutParams(dp(78), ViewGroup.LayoutParams.WRAP_CONTENT));
+        for (int i = 0; i < 4; i++) {
+            final int idx = i;
+            TextView c = text(MhiCodec.PROTO_NAMES[i], 12, TEXT, true);
+            c.setGravity(Gravity.CENTER);
+            c.setOnClickListener(v -> {
+                v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                protocol = idx;
+                save();
+                refresh();
+                statusLine.setText("Protocol " + MhiCodec.PROTO_NAMES[idx] + " selected");
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(34), 1);
+            lp.leftMargin = dp(3);
+            lp.rightMargin = dp(3);
+            protoRow.addView(c, lp);
+            protoChips[i] = c;
+        }
+        root.addView(protoRow);
+
         // Display card
         LinearLayout display = new LinearLayout(this);
         display.setOrientation(LinearLayout.VERTICAL);
@@ -134,7 +162,7 @@ public class MainActivity extends Activity {
         display.setBackground(rounded(CARD, dp(24), STROKE));
         display.setPadding(dp(16), dp(16), dp(16), dp(16));
         LinearLayout.LayoutParams dlp = weighted(4.2f);
-        dlp.topMargin = dp(16);
+        dlp.topMargin = dp(12);
         root.addView(display, dlp);
 
         modeBig = text("COOL", 14, ACCENT, true);
@@ -202,8 +230,8 @@ public class MainActivity extends Activity {
         tileHiPower = tile(g1, "HI POWER", null, v -> { toggleBoost(MhiCodec.BOOST_HIPOWER); send(); });
         tileEcono = tile(g1, "ECONO", null, v -> { toggleBoost(MhiCodec.BOOST_ECONO); send(); });
         tileV = tile(g2, "▲▼ FLOW", valV, v -> { st.swingV = (st.swingV + 1) % 6; send(); });
-        tileH = tile(g2, "◀▶ FLOW", valH, v -> { st.threeD = false; st.swingH = (st.swingH + 1) % 6; send(); });
-        tile3d = tile(g2, "3D AUTO", null, v -> { st.threeD = !st.threeD; send(); });
+        tileH = tile(g2, "◀▶ FLOW", valH, v -> { if (!MhiCodec.hasSwingH(protocol)) { notAvailable("◀▶ FLOW"); return; } st.threeD = false; st.swingH = (st.swingH + 1) % 6; send(); });
+        tile3d = tile(g2, "3D AUTO", null, v -> { if (!MhiCodec.has3D(protocol)) { notAvailable("3D AUTO"); return; } st.threeD = !st.threeD; send(); });
         tileClean = tile(g2, "CLEAN", null, v -> { st.clean = !st.clean; send(); });
 
         // Power
@@ -306,6 +334,10 @@ public class MainActivity extends Activity {
         st.fan = order[(i + 1) % order.length];
     }
 
+    private void notAvailable(String key) {
+        statusLine.setText(key + " is not available in " + MhiCodec.PROTO_NAMES[protocol]);
+    }
+
     private void toggleBoost(int which) {
         st.boost = (st.boost == which) ? MhiCodec.BOOST_NONE : which;
     }
@@ -317,14 +349,14 @@ public class MainActivity extends Activity {
     private void send() {
         save();
         refresh();
-        int[] bytes = MhiCodec.encode(st);
+        int[] bytes = MhiCodec.encode(protocol, st);
         if (ir == null || !ir.hasIrEmitter()) {
             statusLine.setText("No IR emitter on this phone");
             return;
         }
         try {
             ir.transmit(MhiCodec.FREQ, MhiCodec.toPattern(bytes));
-            statusLine.setText("Sent  " + MhiCodec.hex(bytes));
+            statusLine.setText(MhiCodec.PROTO_NAMES[protocol] + "  " + MhiCodec.hex(bytes));
         } catch (Exception e) {
             statusLine.setText("IR error: " + e.getMessage());
         }
@@ -372,6 +404,18 @@ public class MainActivity extends Activity {
         styleTile(tile3d, st.threeD);
         styleTile(tileClean, st.clean);
 
+        for (int i = 0; i < 4; i++) {
+            boolean a = i == protocol;
+            protoChips[i].setBackground(rounded(a ? ACCENT_DIM : TILE, dp(17), a ? ACCENT : STROKE));
+            protoChips[i].setTextColor(a ? ACCENT : MUTED);
+        }
+        boolean h = MhiCodec.hasSwingH(protocol);
+        boolean d = MhiCodec.has3D(protocol);
+        tileH.setAlpha(h ? 1f : 0.3f);
+        tile3d.setAlpha(d ? 1f : 0.3f);
+        chip3d.setAlpha(d ? 1f : 0.3f);
+        if (!h) infoH.setText("n/a");
+
         powerBtn.setText(on ? "TURN OFF" : "TURN ON");
         setPressable(powerBtn, on ? OFF_RED : ON_GREEN, dp(20), 0);
     }
@@ -389,6 +433,7 @@ public class MainActivity extends Activity {
 
     private void save() {
         prefs.edit()
+                .putInt("proto4", protocol)
                 .putBoolean("power", st.power).putInt("mode", st.mode).putInt("temp", st.temp)
                 .putInt("fan", st.fan).putInt("boost", st.boost)
                 .putInt("swingV", st.swingV).putInt("swingH", st.swingH)
@@ -397,6 +442,7 @@ public class MainActivity extends Activity {
     }
 
     private void load() {
+        protocol = prefs.getInt("proto4", MhiCodec.PROTO_ZJ);
         st.power = prefs.getBoolean("power", false);
         st.mode = prefs.getInt("mode", MhiCodec.MODE_COOL);
         st.temp = prefs.getInt("temp", 24);
