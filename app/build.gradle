@@ -1,0 +1,37 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.kareem.mhiremote'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.kareem.mhiremote'
+        minSdk 23
+        targetSdk 34
+        versionCode 1
+        versionName '0.1.0'
+    }
+
+    // fixed key so every new build installs as an update over the previous one
+    signingConfigs {
+        fixed {
+            storeFile file('mhiremote.jks')
+            storePassword 'mhiremote123'
+            keyAlias 'mhiremote'
+            keyPassword 'mhiremote123'
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.fixed
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
