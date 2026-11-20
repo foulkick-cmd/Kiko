@@ -6,329 +6,292 @@ import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
-import android.graphics.drawable.StateListDrawable;
+import android.graphics.drawable.RippleDrawable;
+import android.content.res.ColorStateList;
 import android.hardware.ConsumerIrManager;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.Button;
+import android.view.Window;
+import android.view.WindowManager;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.TextView;
-import android.widget.Toast;
 
-/**
- * Replica of the SRK-CR series wireless remote (catalog HB91-15R02E, page 3).
- * Every press sends the full state, exactly like the original remote.
- */
+/** Full-screen IR remote for Mitsubishi Heavy SRK-CR units (88-bit protocol). */
 public class MainActivity extends Activity {
 
-    private static final int BODY = Color.parseColor("#F1F0EC");
-    private static final int PANEL = Color.parseColor("#B9BBBD");
-    private static final int LCD = Color.parseColor("#C9D3BE");
-    private static final int LCD_ON = Color.parseColor("#1E2418");
-    private static final int LCD_OFF = Color.parseColor("#AAB59F");
-    private static final int KEY = Color.parseColor("#E9E9E6");
-    private static final int KEY_PRESSED = Color.parseColor("#C8C8C4");
-    private static final int KEY_TEAL = Color.parseColor("#9FDCCF");
-    private static final int LABEL = Color.parseColor("#2B2B2B");
+    private static final int BG = Color.parseColor("#0D1117");
+    private static final int CARD = Color.parseColor("#161B22");
+    private static final int TILE = Color.parseColor("#1C222B");
+    private static final int STROKE = Color.parseColor("#262D37");
+    private static final int TEXT = Color.parseColor("#F0F3F6");
+    private static final int MUTED = Color.parseColor("#7D8590");
+    private static final int ACCENT = Color.parseColor("#4FC3F7");
+    private static final int ACCENT_DIM = Color.parseColor("#123447");
+    private static final int ON_GREEN = Color.parseColor("#2EA043");
+    private static final int OFF_RED = Color.parseColor("#DA3633");
 
     private final MhiCodec.State st = new MhiCodec.State();
-    private int protocol = MhiCodec.PROTO_88;
-
     private ConsumerIrManager ir;
     private SharedPreferences prefs;
 
-    private TextView lcdModeAuto, lcdModeCool, lcdModeDry, lcdModeFan;
-    private TextView lcdTemp, lcdFan, lcdPower, lcdFlags, lcdFlow;
-    private TextView status;
-    private Button proto88, proto152;
+    private TextView powerChip, modeBig, tempBig, tempUnit, infoFan, infoV, infoH, statusLine;
+    private TextView chipHiPower, chipEcono, chip3d, chipClean;
+    private LinearLayout tileMode, tileFan, tileHiPower, tileEcono, tileV, tileH, tile3d, tileClean;
+    private TextView valMode, valFan, valV, valH;
+    private TextView powerBtn;
 
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
+        requestWindowFeature(Window.FEATURE_NO_TITLE);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        getWindow().setStatusBarColor(BG);
+        getWindow().setNavigationBarColor(BG);
         ir = (ConsumerIrManager) getSystemService(Context.CONSUMER_IR_SERVICE);
         prefs = getSharedPreferences("state", MODE_PRIVATE);
         load();
         setContentView(buildUi());
         refresh();
-        if (ir == null || !ir.hasIrEmitter()) {
-            status.setText("This phone has no IR emitter / الموبايل مفيهوش IR");
+        if (ir == null || !ir.hasIrEmitter()) statusLine.setText("No IR emitter on this phone");
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            getWindow().getDecorView().setSystemUiVisibility(
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                            | View.SYSTEM_UI_FLAG_FULLSCREEN
+                            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                            | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
         }
     }
 
-    // ---------------------------------------------------------------- UI
+    // ------------------------------------------------------------------ UI
 
     private int dp(float v) {
         return Math.round(v * getResources().getDisplayMetrics().density);
     }
 
-    private View buildUi() {
-        ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(Color.parseColor("#3A3F44"));
-        scroll.setFillViewport(true);
-
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.setPadding(dp(16), dp(16), dp(16), dp(16));
-        scroll.addView(root);
-
-        // Protocol selector (outside the remote body)
-        LinearLayout protoRow = new LinearLayout(this);
-        protoRow.setGravity(Gravity.CENTER);
-        TextView pl = new TextView(this);
-        pl.setText("Protocol  ");
-        pl.setTextColor(Color.WHITE);
-        protoRow.addView(pl);
-        proto88 = smallToggle("88-bit");
-        proto152 = smallToggle("152-bit");
-        proto88.setOnClickListener(v -> { protocol = MhiCodec.PROTO_88; save(); refresh(); });
-        proto152.setOnClickListener(v -> { protocol = MhiCodec.PROTO_152; save(); refresh(); });
-        protoRow.addView(proto88);
-        protoRow.addView(proto152);
-        root.addView(protoRow);
-
-        TextView hint = new TextView(this);
-        hint.setText("لو الجهاز ما استجابش صح، غيّر البروتوكول وجرّب تاني");
-        hint.setTextColor(Color.parseColor("#C8CDD2"));
-        hint.setTextSize(12);
-        hint.setGravity(Gravity.CENTER);
-        hint.setPadding(0, dp(4), 0, dp(10));
-        root.addView(hint);
-
-        // Remote body
-        LinearLayout body = new LinearLayout(this);
-        body.setOrientation(LinearLayout.VERTICAL);
-        body.setPadding(dp(14), dp(14), dp(14), dp(22));
-        GradientDrawable bodyBg = new GradientDrawable();
-        bodyBg.setColor(BODY);
-        bodyBg.setCornerRadii(new float[]{dp(40), dp(40), dp(40), dp(40), dp(60), dp(60), dp(60), dp(60)});
-        body.setBackground(bodyBg);
-        body.setElevation(dp(10));
-        LinearLayout.LayoutParams bodyLp = new LinearLayout.LayoutParams(dp(300), ViewGroup.LayoutParams.WRAP_CONTENT);
-        root.addView(body, bodyLp);
-
-        TextView brand = new TextView(this);
-        brand.setText("◆ MITSUBISHI");
-        brand.setTextColor(LABEL);
-        brand.setTypeface(Typeface.DEFAULT_BOLD);
-        brand.setTextSize(11);
-        brand.setGravity(Gravity.CENTER);
-        brand.setPadding(0, dp(4), 0, dp(8));
-        body.addView(brand);
-
-        // Grey panel holding LCD + keys
-        LinearLayout panel = new LinearLayout(this);
-        panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(dp(10), dp(10), dp(10), dp(12));
-        GradientDrawable panelBg = new GradientDrawable();
-        panelBg.setColor(PANEL);
-        panelBg.setCornerRadius(dp(18));
-        panel.setBackground(panelBg);
-        body.addView(panel);
-
-        panel.addView(buildLcd());
-
-        // Row 1: FAN SPEED | ON/OFF | MODE
-        LinearLayout r1 = row();
-        r1.addView(key("FAN SPEED", false, v -> { cycleFan(); send(); }), cell());
-        r1.addView(powerKey(), cell());
-        r1.addView(key("MODE", false, v -> { cycleMode(); send(); }), cell());
-        panel.addView(r1);
-
-        // Row 2: HI POWER | TEMP ▲ | AIR FLOW ▲▼
-        LinearLayout r2 = row();
-        r2.addView(key("HI POWER", false, v -> { toggleBoost(MhiCodec.BOOST_HIPOWER); send(); }), cell());
-        r2.addView(key("TEMP ▲", false, v -> { tempStep(1); send(); }), cell());
-        r2.addView(key("AIR FLOW ▲▼", true, v -> { st.swingV = (st.swingV + 1) % 6; send(); }), cell());
-        panel.addView(r2);
-
-        // Row 3: ECONO | TEMP ▼ | AIR FLOW ◀▶
-        LinearLayout r3 = row();
-        r3.addView(key("ECONO", false, v -> { toggleBoost(MhiCodec.BOOST_ECONO); send(); }), cell());
-        r3.addView(key("TEMP ▼", false, v -> { tempStep(-1); send(); }), cell());
-        r3.addView(key("AIR FLOW ◀▶", true, v -> {
-            st.threeD = false; st.swingH = (st.swingH + 1) % 6; send();
-        }), cell());
-        panel.addView(r3);
-
-        // Row 4: ON TIMER | OFF TIMER | 3D AUTO
-        LinearLayout r4 = row();
-        r4.addView(key("ON TIMER", false, v -> unsupported("ON TIMER")), cell());
-        r4.addView(key("OFF TIMER", false, v -> unsupported("OFF TIMER")), cell());
-        r4.addView(key("3D AUTO", true, v -> { st.threeD = !st.threeD; send(); }), cell());
-        panel.addView(r4);
-
-        // Row 5: SLEEP | CANCEL | (blank)
-        LinearLayout r5 = row();
-        r5.addView(key("SLEEP", false, v -> {
-            if (protocol == MhiCodec.PROTO_88) { unsupported("SLEEP"); return; }
-            st.sleep = !st.sleep; send();
-        }), cell());
-        r5.addView(key("CANCEL", false, v -> { st.sleep = false; send(); }), cell());
-        View blank = new View(this);
-        r5.addView(blank, cell());
-        panel.addView(r5);
-
-        // Bottom strip: CLEAN | ACL
-        LinearLayout r6 = row();
-        r6.addView(key("CLEAN", false, v -> { st.clean = !st.clean; send(); }), cell());
-        View blank2 = new View(this);
-        r6.addView(blank2, cell());
-        r6.addView(key("ACL", false, v -> {
-            MhiCodec.State d = new MhiCodec.State();
-            copy(d, st); save(); refresh();
-            Toast.makeText(this, "Remote reset (nothing sent)", Toast.LENGTH_SHORT).show();
-        }), cell());
-        panel.addView(r6);
-
-        status = new TextView(this);
-        status.setTextColor(Color.parseColor("#C8CDD2"));
-        status.setTextSize(11);
-        status.setTypeface(Typeface.MONOSPACE);
-        status.setGravity(Gravity.CENTER);
-        status.setPadding(0, dp(12), 0, 0);
-        status.setText("Point the phone at the AC and press ON/OFF");
-        root.addView(status);
-
-        return scroll;
+    private GradientDrawable rounded(int color, float r, int stroke) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(color);
+        g.setCornerRadius(r);
+        if (stroke != 0) g.setStroke(dp(1), stroke);
+        return g;
     }
 
-    private View buildLcd() {
-        LinearLayout lcd = new LinearLayout(this);
-        lcd.setOrientation(LinearLayout.VERTICAL);
-        lcd.setPadding(dp(10), dp(8), dp(10), dp(8));
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(LCD);
-        bg.setCornerRadius(dp(6));
-        bg.setStroke(dp(2), Color.parseColor("#8E968A"));
-        lcd.setBackground(bg);
-
-        LinearLayout top = new LinearLayout(this);
-        LinearLayout modes = new LinearLayout(this);
-        modes.setOrientation(LinearLayout.VERTICAL);
-        lcdModeAuto = lcdText("AUTO", 11);
-        lcdModeCool = lcdText("COOL ❄", 11);
-        lcdModeDry = lcdText("DRY 💧", 11);
-        lcdModeFan = lcdText("FAN", 11);
-        modes.addView(lcdModeAuto);
-        modes.addView(lcdModeCool);
-        modes.addView(lcdModeDry);
-        modes.addView(lcdModeFan);
-        top.addView(modes, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-
-        lcdTemp = lcdText("24°C", 34);
-        lcdTemp.setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.BOLD));
-        lcdTemp.setGravity(Gravity.CENTER);
-        top.addView(lcdTemp, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 2));
-
-        LinearLayout right = new LinearLayout(this);
-        right.setOrientation(LinearLayout.VERTICAL);
-        right.setGravity(Gravity.END);
-        lcdPower = lcdText("OFF", 12);
-        lcdPower.setTypeface(Typeface.DEFAULT_BOLD);
-        lcdFan = lcdText("FAN AUTO", 11);
-        right.addView(lcdPower);
-        right.addView(lcdFan);
-        top.addView(right, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        lcd.addView(top);
-
-        lcdFlow = lcdText("", 10);
-        lcd.addView(lcdFlow);
-        lcdFlags = lcdText("", 10);
-        lcdFlags.setTypeface(Typeface.DEFAULT_BOLD);
-        lcd.addView(lcdFlags);
-
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.bottomMargin = dp(10);
-        lcd.setLayoutParams(lp);
-        return lcd;
+    private void setPressable(View v, int color, float r, int stroke) {
+        v.setBackground(new RippleDrawable(ColorStateList.valueOf(Color.parseColor("#33FFFFFF")),
+                rounded(color, r, stroke), rounded(Color.WHITE, r, 0)));
+        v.setClickable(true);
     }
 
-    private TextView lcdText(String s, int sp) {
+    private TextView text(String s, float sp, int color, boolean bold) {
         TextView t = new TextView(this);
         t.setText(s);
         t.setTextSize(sp);
-        t.setTextColor(LCD_ON);
+        t.setTextColor(color);
+        t.setTypeface(Typeface.create("sans-serif" + (bold ? "-medium" : ""), Typeface.NORMAL));
+        t.setIncludeFontPadding(false);
         return t;
     }
 
-    private LinearLayout row() {
-        LinearLayout r = new LinearLayout(this);
-        r.setOrientation(LinearLayout.HORIZONTAL);
-        r.setGravity(Gravity.CENTER_VERTICAL);
+    private LinearLayout.LayoutParams weighted(float w) {
+        return new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, w);
+    }
+
+    private View buildUi() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(BG);
+        root.setPadding(dp(16), dp(20), dp(16), dp(16));
+
+        // Header
+        LinearLayout header = new LinearLayout(this);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout titles = new LinearLayout(this);
+        titles.setOrientation(LinearLayout.VERTICAL);
+        titles.addView(text("Air Conditioner", 20, TEXT, true));
+        TextView sub = text("Mitsubishi Heavy  ·  SRK CR", 12, MUTED, false);
+        sub.setPadding(0, dp(4), 0, 0);
+        titles.addView(sub);
+        header.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        powerChip = text("OFF", 12, TEXT, true);
+        powerChip.setPadding(dp(12), dp(6), dp(12), dp(6));
+        header.addView(powerChip);
+        root.addView(header);
+
+        // Display card
+        LinearLayout display = new LinearLayout(this);
+        display.setOrientation(LinearLayout.VERTICAL);
+        display.setGravity(Gravity.CENTER);
+        display.setBackground(rounded(CARD, dp(24), STROKE));
+        display.setPadding(dp(16), dp(16), dp(16), dp(16));
+        LinearLayout.LayoutParams dlp = weighted(4.2f);
+        dlp.topMargin = dp(16);
+        root.addView(display, dlp);
+
+        modeBig = text("COOL", 14, ACCENT, true);
+        modeBig.setLetterSpacing(0.25f);
+        display.addView(modeBig);
+
+        LinearLayout tempRow = new LinearLayout(this);
+        tempRow.setGravity(Gravity.CENTER);
+        tempBig = text("24", 96, TEXT, false);
+        tempBig.setTypeface(Typeface.create("sans-serif-thin", Typeface.NORMAL));
+        tempUnit = text("°C", 28, MUTED, false);
+        tempUnit.setPadding(dp(4), 0, 0, dp(48));
+        tempRow.addView(tempBig);
+        tempRow.addView(tempUnit);
+        display.addView(tempRow);
+
+        LinearLayout info = new LinearLayout(this);
+        info.setGravity(Gravity.CENTER);
+        info.setPadding(0, dp(4), 0, dp(14));
+        infoFan = infoItem(info, "FAN");
+        infoV = infoItem(info, "UP / DOWN");
+        infoH = infoItem(info, "LEFT / RIGHT");
+        display.addView(info, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout chips = new LinearLayout(this);
+        chips.setGravity(Gravity.CENTER);
+        chipHiPower = chip(chips, "HI POWER");
+        chipEcono = chip(chips, "ECONO");
+        chip3d = chip(chips, "3D AUTO");
+        chipClean = chip(chips, "CLEAN");
+        display.addView(chips);
+
+        // Temperature controls
+        LinearLayout tempCtl = new LinearLayout(this);
+        tempCtl.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams tlp = weighted(1.3f);
+        tlp.topMargin = dp(14);
+        root.addView(tempCtl, tlp);
+        tempCtl.addView(roundKey("−", v -> { tempStep(-1); send(); }),
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1));
+        TextView tl = text("TEMP", 13, MUTED, true);
+        tl.setGravity(Gravity.CENTER);
+        tl.setLetterSpacing(0.2f);
+        tempCtl.addView(tl, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 0.8f));
+        tempCtl.addView(roundKey("+", v -> { tempStep(1); send(); }),
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1));
+
+        // Function grid: 2 rows x 4
+        LinearLayout g1 = new LinearLayout(this);
+        LinearLayout g2 = new LinearLayout(this);
+        LinearLayout.LayoutParams g1lp = weighted(1.25f);
+        g1lp.topMargin = dp(14);
+        LinearLayout.LayoutParams g2lp = weighted(1.25f);
+        g2lp.topMargin = dp(10);
+        root.addView(g1, g1lp);
+        root.addView(g2, g2lp);
+
+        valMode = new TextView(this);
+        valFan = new TextView(this);
+        valV = new TextView(this);
+        valH = new TextView(this);
+        tileMode = tile(g1, "MODE", valMode, v -> { cycleMode(); send(); });
+        tileFan = tile(g1, "FAN", valFan, v -> { cycleFan(); send(); });
+        tileHiPower = tile(g1, "HI POWER", null, v -> { toggleBoost(MhiCodec.BOOST_HIPOWER); send(); });
+        tileEcono = tile(g1, "ECONO", null, v -> { toggleBoost(MhiCodec.BOOST_ECONO); send(); });
+        tileV = tile(g2, "▲▼ FLOW", valV, v -> { st.swingV = (st.swingV + 1) % 6; send(); });
+        tileH = tile(g2, "◀▶ FLOW", valH, v -> { st.threeD = false; st.swingH = (st.swingH + 1) % 6; send(); });
+        tile3d = tile(g2, "3D AUTO", null, v -> { st.threeD = !st.threeD; send(); });
+        tileClean = tile(g2, "CLEAN", null, v -> { st.clean = !st.clean; send(); });
+
+        // Power
+        powerBtn = text("TURN ON", 16, Color.WHITE, true);
+        powerBtn.setGravity(Gravity.CENTER);
+        powerBtn.setLetterSpacing(0.15f);
+        powerBtn.setOnClickListener(v -> {
+            v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+            st.power = !st.power;
+            send();
+        });
+        LinearLayout.LayoutParams plp = weighted(1.0f);
+        plp.topMargin = dp(14);
+        root.addView(powerBtn, plp);
+
+        statusLine = text("Point the phone at the AC", 10, MUTED, false);
+        statusLine.setTypeface(Typeface.MONOSPACE);
+        statusLine.setGravity(Gravity.CENTER);
+        statusLine.setPadding(0, dp(10), 0, 0);
+        root.addView(statusLine);
+
+        return root;
+    }
+
+    private TextView infoItem(LinearLayout parent, String label) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER);
+        TextView l = text(label, 10, MUTED, true);
+        l.setLetterSpacing(0.1f);
+        TextView v = text("", 14, TEXT, true);
+        v.setPadding(0, dp(4), 0, 0);
+        box.addView(l);
+        box.addView(v);
+        parent.addView(box, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        return v;
+    }
+
+    private TextView chip(LinearLayout parent, String label) {
+        TextView c = text(label, 10, MUTED, true);
+        c.setPadding(dp(10), dp(5), dp(10), dp(5));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dp(6);
-        r.setLayoutParams(lp);
-        return r;
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.leftMargin = dp(3);
+        lp.rightMargin = dp(3);
+        parent.addView(c, lp);
+        return c;
     }
 
-    private LinearLayout.LayoutParams cell() {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(44), 1);
-        lp.leftMargin = dp(4);
-        lp.rightMargin = dp(4);
-        return lp;
-    }
-
-    private StateListDrawable keyBg(int color, float radius) {
-        GradientDrawable n = new GradientDrawable();
-        n.setColor(color);
-        n.setCornerRadius(radius);
-        n.setStroke(dp(1), Color.parseColor("#8A8C8E"));
-        GradientDrawable p = new GradientDrawable();
-        p.setColor(KEY_PRESSED);
-        p.setCornerRadius(radius);
-        p.setStroke(dp(1), Color.parseColor("#6A6C6E"));
-        StateListDrawable s = new StateListDrawable();
-        s.addState(new int[]{android.R.attr.state_pressed}, p);
-        s.addState(new int[]{}, n);
-        return s;
-    }
-
-    private Button key(String label, boolean teal, View.OnClickListener l) {
-        Button b = new Button(this);
-        b.setText(label);
-        b.setAllCaps(false);
-        b.setTextSize(10);
-        b.setTextColor(LABEL);
-        b.setPadding(0, 0, 0, 0);
-        b.setStateListAnimator(null);
-        b.setBackground(keyBg(teal ? KEY_TEAL : KEY, dp(10)));
-        b.setOnClickListener(v -> {
+    private TextView roundKey(String label, View.OnClickListener l) {
+        TextView k = text(label, 34, TEXT, false);
+        k.setGravity(Gravity.CENTER);
+        setPressable(k, TILE, dp(20), STROKE);
+        k.setOnClickListener(v -> {
             v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
             l.onClick(v);
         });
-        return b;
+        return k;
     }
 
-    private Button powerKey() {
-        Button b = key("ON/OFF", false, v -> { st.power = !st.power; send(); });
-        b.setTypeface(Typeface.DEFAULT_BOLD);
-        b.setBackground(keyBg(Color.parseColor("#F7F7F2"), dp(22)));
-        return b;
-    }
-
-    private Button smallToggle(String label) {
-        Button b = new Button(this);
-        b.setText(label);
-        b.setAllCaps(false);
-        b.setTextSize(12);
-        b.setStateListAnimator(null);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(90), dp(36));
+    private LinearLayout tile(LinearLayout parent, String label, TextView value, View.OnClickListener l) {
+        LinearLayout t = new LinearLayout(this);
+        t.setOrientation(LinearLayout.VERTICAL);
+        t.setGravity(Gravity.CENTER);
+        TextView lab = text(label, 11, TEXT, true);
+        lab.setGravity(Gravity.CENTER);
+        t.addView(lab);
+        if (value != null) {
+            value.setTextSize(11);
+            value.setTextColor(ACCENT);
+            value.setGravity(Gravity.CENTER);
+            value.setPadding(0, dp(5), 0, 0);
+            t.addView(value);
+        }
+        t.setOnClickListener(v -> {
+            v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+            l.onClick(v);
+        });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1);
         lp.leftMargin = dp(4);
-        b.setLayoutParams(lp);
-        return b;
+        lp.rightMargin = dp(4);
+        parent.addView(t, lp);
+        return t;
     }
 
-    // ---------------------------------------------------------------- logic
+    // ------------------------------------------------------------------ logic
 
     private void cycleMode() {
-        // catalog: cooling-only unit -> AUTO, COOL, DRY, FAN
         int[] order = {MhiCodec.MODE_AUTO, MhiCodec.MODE_COOL, MhiCodec.MODE_DRY, MhiCodec.MODE_FAN};
         int i = 0;
         for (int k = 0; k < order.length; k++) if (order[k] == st.mode) i = k;
@@ -351,85 +314,89 @@ public class MainActivity extends Activity {
         st.temp = Math.max(MhiCodec.MIN_TEMP, Math.min(MhiCodec.MAX_TEMP, st.temp + d));
     }
 
-    private void unsupported(String what) {
-        Toast.makeText(this, what + ": مش موجود في البروتوكول المعروف", Toast.LENGTH_SHORT).show();
-    }
-
     private void send() {
         save();
         refresh();
-        int[] bytes = MhiCodec.encode(protocol, st);
-        String hex = MhiCodec.hex(bytes);
+        int[] bytes = MhiCodec.encode(st);
         if (ir == null || !ir.hasIrEmitter()) {
-            status.setText("No IR emitter\n" + hex);
+            statusLine.setText("No IR emitter on this phone");
             return;
         }
         try {
             ir.transmit(MhiCodec.FREQ, MhiCodec.toPattern(bytes));
-            status.setText("Sent " + protocol + "-bit\n" + hex);
+            statusLine.setText("Sent  " + MhiCodec.hex(bytes));
         } catch (Exception e) {
-            status.setText("IR error: " + e.getMessage());
+            statusLine.setText("IR error: " + e.getMessage());
         }
     }
 
+    private static final String[] MODE_NAMES = {"AUTO", "COOL", "DRY", "FAN"};
+    private static final String[] FAN_NAMES = {"Auto", "High", "Medium", "Low"};
+
     private void refresh() {
         boolean on = st.power;
-        TextView[] modes = {lcdModeAuto, lcdModeCool, lcdModeDry, lcdModeFan};
-        int[] vals = {MhiCodec.MODE_AUTO, MhiCodec.MODE_COOL, MhiCodec.MODE_DRY, MhiCodec.MODE_FAN};
-        for (int i = 0; i < 4; i++) modes[i].setTextColor(vals[i] == st.mode ? LCD_ON : LCD_OFF);
+        powerChip.setText(on ? "RUNNING" : "OFF");
+        powerChip.setBackground(rounded(on ? Color.parseColor("#12321B") : Color.parseColor("#2A1416"), dp(14), 0));
+        powerChip.setTextColor(on ? Color.parseColor("#56D364") : Color.parseColor("#F85149"));
 
-        // catalog: AUTO mode shows no set temperature
-        lcdTemp.setText(st.mode == MhiCodec.MODE_AUTO ? "--" : st.temp + "°C");
-        lcdPower.setText(on ? "RUN" : "OFF");
+        modeBig.setText(MODE_NAMES[st.mode]);
+        boolean showTemp = st.mode != MhiCodec.MODE_AUTO;
+        tempBig.setText(showTemp ? String.valueOf(st.temp) : "--");
+        tempUnit.setVisibility(showTemp ? View.VISIBLE : View.INVISIBLE);
+        float alpha = on ? 1f : 0.45f;
+        tempBig.setAlpha(alpha);
+        modeBig.setAlpha(alpha);
 
-        String fan;
-        if (st.boost == MhiCodec.BOOST_HIPOWER) fan = "HI POWER";
-        else if (st.boost == MhiCodec.BOOST_ECONO) fan = "ECONO";
-        else fan = new String[]{"FAN AUTO", "FAN HI", "FAN MED", "FAN LO"}[st.fan];
-        lcdFan.setText(fan);
+        String fan = st.boost == MhiCodec.BOOST_HIPOWER ? "Hi Power"
+                : st.boost == MhiCodec.BOOST_ECONO ? "Econo" : FAN_NAMES[st.fan];
+        infoFan.setText(fan);
+        infoV.setText(MhiCodec.SWING_V_NAMES[st.swingV]);
+        infoH.setText(st.threeD ? "3D Auto" : MhiCodec.SWING_H_NAMES[st.swingH]);
 
-        lcdFlow.setText("▲▼ " + MhiCodec.SWING_V_NAMES[st.swingV]
-                + "   ◀▶ " + (st.threeD ? "3D AUTO" : MhiCodec.SWING_H_NAMES[st.swingH]));
+        styleChip(chipHiPower, st.boost == MhiCodec.BOOST_HIPOWER);
+        styleChip(chipEcono, st.boost == MhiCodec.BOOST_ECONO);
+        styleChip(chip3d, st.threeD);
+        styleChip(chipClean, st.clean);
 
-        StringBuilder f = new StringBuilder();
-        if (st.threeD) f.append("3D AUTO  ");
-        if (st.sleep) f.append("SLEEP  ");
-        if (st.clean) f.append("CLEAN  ");
-        lcdFlags.setText(f.toString().trim());
+        valMode.setText(MODE_NAMES[st.mode]);
+        valFan.setText(fan);
+        valV.setText(MhiCodec.SWING_V_NAMES[st.swingV]);
+        valH.setText(st.threeD ? "3D" : MhiCodec.SWING_H_NAMES[st.swingH]);
 
-        styleToggle(proto88, protocol == MhiCodec.PROTO_88);
-        styleToggle(proto152, protocol == MhiCodec.PROTO_152);
+        styleTile(tileMode, false);
+        styleTile(tileFan, false);
+        styleTile(tileV, false);
+        styleTile(tileH, false);
+        styleTile(tileHiPower, st.boost == MhiCodec.BOOST_HIPOWER);
+        styleTile(tileEcono, st.boost == MhiCodec.BOOST_ECONO);
+        styleTile(tile3d, st.threeD);
+        styleTile(tileClean, st.clean);
+
+        powerBtn.setText(on ? "TURN OFF" : "TURN ON");
+        setPressable(powerBtn, on ? OFF_RED : ON_GREEN, dp(20), 0);
     }
 
-    private void styleToggle(Button b, boolean active) {
-        GradientDrawable g = new GradientDrawable();
-        g.setCornerRadius(dp(18));
-        g.setColor(active ? Color.parseColor("#9FDCCF") : Color.parseColor("#55595E"));
-        b.setBackground(g);
-        b.setTextColor(active ? LABEL : Color.WHITE);
+    private void styleChip(TextView c, boolean active) {
+        c.setBackground(rounded(active ? ACCENT_DIM : Color.TRANSPARENT, dp(12), active ? ACCENT : STROKE));
+        c.setTextColor(active ? ACCENT : MUTED);
     }
 
-    // ---------------------------------------------------------------- persistence
-
-    private static void copy(MhiCodec.State from, MhiCodec.State to) {
-        to.power = from.power; to.mode = from.mode; to.temp = from.temp; to.fan = from.fan;
-        to.boost = from.boost; to.swingV = from.swingV; to.swingH = from.swingH;
-        to.threeD = from.threeD; to.clean = from.clean; to.sleep = from.sleep;
+    private void styleTile(LinearLayout t, boolean active) {
+        setPressable(t, active ? ACCENT_DIM : TILE, dp(18), active ? ACCENT : STROKE);
     }
+
+    // ------------------------------------------------------------------ persistence
 
     private void save() {
         prefs.edit()
-                .putInt("protocol", protocol)
                 .putBoolean("power", st.power).putInt("mode", st.mode).putInt("temp", st.temp)
                 .putInt("fan", st.fan).putInt("boost", st.boost)
                 .putInt("swingV", st.swingV).putInt("swingH", st.swingH)
                 .putBoolean("threeD", st.threeD).putBoolean("clean", st.clean)
-                .putBoolean("sleep", st.sleep)
                 .apply();
     }
 
     private void load() {
-        protocol = prefs.getInt("protocol", MhiCodec.PROTO_88);
         st.power = prefs.getBoolean("power", false);
         st.mode = prefs.getInt("mode", MhiCodec.MODE_COOL);
         st.temp = prefs.getInt("temp", 24);
@@ -439,6 +406,5 @@ public class MainActivity extends Activity {
         st.swingH = prefs.getInt("swingH", 0);
         st.threeD = prefs.getBoolean("threeD", false);
         st.clean = prefs.getBoolean("clean", false);
-        st.sleep = prefs.getBoolean("sleep", false);
     }
 }

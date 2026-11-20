@@ -1,10 +1,7 @@
 # MHI Remote
 
-Phone IR replica of the wireless remote for Mitsubishi Heavy Industries SRK-CR wall units
-(SRK52/71/90 CRBN / CRBP), layout taken from catalog HB91-15R02E.
+Full-screen IR remote for Mitsubishi Heavy Industries SRK-CR wall units (SRK52/71/90 CRBN / CRBP).
 
-- Sends the full state on every key press, like the original remote.
-- Two encodings, switchable at the top: 88-bit (RKX502A001C family) and 152-bit (RLA502A700B family),
-  ported from IRremoteESP8266 and checked byte-for-byte against it (600 random states + real capture).
-- Not in either known protocol: ON/OFF TIMER (both), SLEEP (88-bit).
-- Needs a phone with an IR blaster.
+- 88-bit protocol (RKX502A001C family), ported from IRremoteESP8266 and verified byte-for-byte against it.
+- Sends the full state on every press: power, mode, temperature, fan, HI POWER / ECONO, air flow, 3D AUTO, CLEAN.
+- Every build is signed with the same key (app/mhiremote.jks), so new versions install over old ones.

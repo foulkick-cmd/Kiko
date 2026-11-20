@@ -7,7 +7,7 @@
     <application
         android:label="MHI Remote"
         android:icon="@android:drawable/ic_menu_compass"
-        android:theme="@android:style/Theme.Material.NoActionBar"
+        android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen"
         android:allowBackup="true">
         <activity
             android:name=".MainActivity"
